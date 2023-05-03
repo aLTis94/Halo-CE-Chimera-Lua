@@ -47,6 +47,10 @@ function OnTick()
 	end
 end
 
-function GetName(DynamicObject)--	Gets directory + name of the object
-	return read_string(read_dword(read_word(DynamicObject) * 32 + 0x40440038))
+function GetName(object)
+    if object ~= nil then
+        local tag_addr = get_tag(read_dword(object))
+        local tag_path_addr = read_dword(tag_addr + 0x10)
+        return read_string(tag_path_addr)
+    end
 end
