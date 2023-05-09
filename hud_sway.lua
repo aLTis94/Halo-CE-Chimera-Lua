@@ -1,4 +1,4 @@
--- version 0.15 (by aLTis)
+-- version 0.2 (by aLTis)
 
 --CONFIG
 
@@ -11,7 +11,15 @@
 	enable_in_vehicles = false -- only works if mouse input is enabled
 	inverse_direction = true
 	
+	weapon_animation_sway = true
+	weapon_animation_sway_amount = 15
+	camera_sway_amount = 0.04 -- camera sway amount
+	camera_sway_recenter_speed = 0.01 -- used to move the camera back to its position
+	
 --END OF CONFIG
+
+--Known issues:
+-- melee right after switching to BR moves grenade number?
 
 clua_version = 2.042
 
@@ -29,11 +37,18 @@ local player_alive_timer = 5
 		
 local fp_anim_address = 0x40000EB8
 local mouse_input_address = 0x64C73C
-		
+local zoom_address = read_dword(0x815918) + 204
+
+local x_adjust = 0
+local z_adjust = 0
+	
 set_callback("tick", "OnTick")
 set_callback("frame", "OnFrame")
 set_callback("map load", "OnMapLoad")
 set_callback("unload", "OnUnload")
+if weapon_animation_sway then
+	set_callback("precamera", "OnCamera")
+end
 
 function OnMapLoad()
 	HUD = nil
@@ -41,12 +56,107 @@ function OnMapLoad()
 	player_alive_timer = 5
 end
 
+function OnCamera(cam_x, cam_y, cam_z, fov, x1, y1, z1, x2, y2, z2)
+	local player = get_dynamic_player()
+	if player ~= nil then
+		local no_vehicle = read_dword(player + 0x11C) == 0xFFFFFFFF
+		local unzoomed = read_word(zoom_address) == 0xFFFF
+		
+		if testx_old and no_vehicle and unzoomed then
+			local yaw, pitch = GetAnglesFrom3DVector(x1,y1,z1)
+			
+			local time_after_tick = ticks() - math.floor(ticks())
+			local t1 = (testx_old*(1-time_after_tick)+testx*time_after_tick)*camera_sway_amount + yaw
+			local t2 = (testz_old*(1-time_after_tick)+testz*time_after_tick)*camera_sway_amount + pitch
+			
+			local x, y, z = Get3DVectorFromAngles(t1,t2)
+			x1,y1,z1 = x1+x,y1+y,z1+z
+			x, y, z = Get3DVectorFromAngles(t1,t2+math.pi/2)
+			x2,y2,z2 = x2+x,y2+y,z2+z
+			
+			x1, y1, z1 = Normalize(x1, y1, z1)
+			x2, y2, z2 = Normalize(x2, y2, z2)
+			
+			return cam_x, cam_y, cam_z, fov, x1, y1, z1, x2, y2, z2
+		end
+	end
+end
+
+function Normalize(x, y, z)
+	local length = 1/math.sqrt(x * x + y * y + z * z)
+	x = x * length
+	y = y * length
+	z = z * length
+	return x, y, z
+end
+
+function Get3DVectorFromAngles(alpha,beta)
+	local x = math.cos(alpha) * math.cos(beta)
+	local y = math.sin(alpha) * math.cos(beta)
+	local z = math.sin(beta)
+	return x, y, z, 1
+end
+
+function GetAnglesFrom3DVector(x,y,z)
+	local pitch = math.asin(z)
+	local yaw = math.atan(x,-y) - math.pi/2
+	return yaw, pitch
+end
+
 function OnFrame()
 	if sway_hud and HUD then
 		local time_after_tick = ticks() - math.floor(ticks())
-		--console_out(aim_left_amount_previous	)
+		
 		x = (aim_left_amount_previous*(1-time_after_tick)+aim_left_amount*time_after_tick)*horizontal_sway
 		z = (aim_down_amount_previous*(1-time_after_tick)+aim_down_amount*time_after_tick)*vertical_sway
+		
+		if weapon_animation_sway then
+			local node = 148 + 28
+			testx = read_float(fp_anim_address + node)
+			testy = read_float(fp_anim_address + node + 4)
+			testz = read_float(fp_anim_address + node + 8)
+			
+			testx, testz = GetAnglesFrom3DVector(testx, testy, testz)
+			
+			testx = testx + x_adjust
+			local adjust_speed = math.sqrt(math.abs(testx))*camera_sway_recenter_speed
+			--local adjust_speed = math.abs(testx)*0.03
+			if testx < 0 then
+				x_adjust = x_adjust + adjust_speed
+			elseif testx > 0 then
+				x_adjust = x_adjust - adjust_speed
+			else
+				x_adjust = 0
+			end
+			
+			testz = testz + z_adjust
+			adjust_speed = math.sqrt(math.abs(testz))*camera_sway_recenter_speed
+			--adjust_speed = math.abs(testz)*0.03
+			if testz < 0 then
+				z_adjust = z_adjust + adjust_speed
+			elseif testz > 0 then
+				z_adjust = z_adjust - adjust_speed
+			else
+				z_adjust = 0
+			end
+			
+			local player = get_dynamic_player()
+			if player ~= nil then
+				local object = get_object(read_dword(player + 0x118))
+				if object ~= nil and read_word(object + 0xB4) == 2 then
+					local ready_timer = read_word(object + 0x23A)-15
+					if ready_timer > 0 then
+						local ready_fixer = 1/math.sqrt(ready_timer)
+						testx = testx*ready_fixer
+						testz = testz*ready_fixer
+						--console_out(ready_fixer)
+					end
+				end
+			end
+			
+			x = x + testx*weapon_animation_sway_amount
+			z = z + -testz*weapon_animation_sway_amount
+		end
 		
 		if x > 0 then
 			x = math.floor(x)
@@ -84,7 +194,12 @@ function OnFrame()
 		end
 	end
 end
-		
+	
+function round(num, numDecimalPlaces)
+  local mult = 10^(numDecimalPlaces or 0)
+  return math.floor(num * mult + 0.5) / mult
+end
+	
 function GetWPHI(meta_id)
 	local tag = get_tag(meta_id)
 	if tag then
@@ -232,6 +347,9 @@ end
 function OnTick()
 	if sway_hud then
 		if tonumber(ticks()) < 15 then return end
+		
+		testx_old = testx
+		testz_old = testz
 		
 		local player = get_dynamic_player()
 		if player ~= nil then
