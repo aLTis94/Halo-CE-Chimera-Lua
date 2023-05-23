@@ -11,15 +11,19 @@
 	enable_in_vehicles = false -- only works if mouse input is enabled
 	inverse_direction = true
 	
+	
 	weapon_animation_sway = true
 	weapon_animation_sway_amount = 15
-	camera_sway_amount = 0.04 -- camera sway amount
+	
+	camera_sway_amount = 0.03 -- camera sway amount
 	camera_sway_recenter_speed = 0.01 -- used to move the camera back to its position
+	camera_sway_when_idle_only = true -- doesn't move camera if player is moving
 	
 --END OF CONFIG
 
 --Known issues:
 -- melee right after switching to BR moves grenade number?
+-- some camera movements when loading a new map or reloading a script
 
 clua_version = 2.042
 
@@ -63,11 +67,20 @@ function OnCamera(cam_x, cam_y, cam_z, fov, x1, y1, z1, x2, y2, z2)
 		local unzoomed = read_word(zoom_address) == 0xFFFF
 		
 		if testx_old and no_vehicle and unzoomed then
+			local velocity = math.abs(read_float(player + 0x68)) +  math.abs(read_float(player + 0x6C))
+			local multiplier = 1
+			if camera_sway_when_idle_only then
+				multiplier = multiplier - velocity*9.5
+				if multiplier < 0 then
+					multiplier = 0
+				end
+			end
+			--console_out(multiplier)
 			local yaw, pitch = GetAnglesFrom3DVector(x1,y1,z1)
 			
 			local time_after_tick = ticks() - math.floor(ticks())
-			local t1 = (testx_old*(1-time_after_tick)+testx*time_after_tick)*camera_sway_amount + yaw
-			local t2 = (testz_old*(1-time_after_tick)+testz*time_after_tick)*camera_sway_amount + pitch
+			local t1 = (testx_old*(1-time_after_tick)+testx*time_after_tick)*camera_sway_amount*multiplier + yaw
+			local t2 = (testz_old*(1-time_after_tick)+testz*time_after_tick)*camera_sway_amount*multiplier + pitch
 			
 			local x, y, z = Get3DVectorFromAngles(t1,t2)
 			x1,y1,z1 = x1+x,y1+y,z1+z
@@ -105,6 +118,7 @@ end
 
 function OnFrame()
 	if sway_hud and HUD then
+		local player = get_dynamic_player()
 		local time_after_tick = ticks() - math.floor(ticks())
 		
 		x = (aim_left_amount_previous*(1-time_after_tick)+aim_left_amount*time_after_tick)*horizontal_sway
@@ -140,7 +154,6 @@ function OnFrame()
 				z_adjust = 0
 			end
 			
-			local player = get_dynamic_player()
 			if player ~= nil then
 				local object = get_object(read_dword(player + 0x118))
 				if object ~= nil and read_word(object + 0xB4) == 2 then
@@ -169,6 +182,12 @@ function OnFrame()
 		elseif z < 0 then
 			z = math.ceil(z)
 		end	
+		
+		-- Write x and z somewhere so other scripts can read this data :)
+		if player ~= nil then
+			write_short(player + 0x38A, x)
+			write_short(player + 0x3BA, z)
+		end
 		
 		for tag_data,adresses_table in pairs (HUD) do
 			for address, INFO in pairs (adresses_table) do
@@ -235,9 +254,17 @@ function GetWPHI(meta_id)
 					HUD[tag_data][0x60]["coord"][i*2+1] = read_short(struct + HUD[tag_data][0x60]["y"])
 					if anchor == 4 then
 						local bitmap = read_string(read_dword(struct + 0x4C))
-						if HUD[tag_data][0x60]["coord"][i*2] == 0 and HUD[tag_data][0x60]["coord"][i*2+1] == 0 or string.find(bitmap, "dynamic") then
-							HUD[tag_data][0x60] = nil
-							break
+						if bitmap ~= nil then
+							if HUD[tag_data][0x60]["coord"][i*2] == 0 and HUD[tag_data][0x60]["coord"][i*2+1] == 0 or string.find(bitmap, "dynamic") then
+								HUD[tag_data][0x60] = nil
+								break
+							end
+						else
+							--console_out(tag_name.." had no bitmap path")
+							HUD[tag_data] = nil
+							return
+							--HUD[tag_data][0x60] = nil
+							--break
 						end
 					end
 				--else
