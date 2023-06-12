@@ -1,6 +1,6 @@
 --Pistol color script by aLTis. Version 1.0.1
 
---CONFIG	(use values between 0 and 1)
+--CONFIG (use values between 0 and 1)
 
 	--THESE AFFECT YOUR PISTOL ONLY
 		--Primary color RGB
