@@ -1,4 +1,4 @@
--- version 0.2 (by aLTis)
+-- version 0.23 (by aLTis)
 
 --CONFIG
 
@@ -13,15 +13,16 @@
 	
 	
 	weapon_animation_sway = true
-	weapon_animation_sway_amount = 15
+	weapon_animation_sway_amount = 5
 	
-	camera_sway_amount = 0.03 -- camera sway amount
+	camera_sway_amount = 0.01 -- camera sway amount
 	camera_sway_recenter_speed = 0.01 -- used to move the camera back to its position
 	camera_sway_when_idle_only = true -- doesn't move camera if player is moving
 	
 --END OF CONFIG
 
 --Known issues:
+-- camera moves weird if game is paused and console is open at the same time
 -- melee right after switching to BR moves grenade number?
 -- some camera movements when loading a new map or reloading a script
 
@@ -42,10 +43,12 @@ local player_alive_timer = 5
 local fp_anim_address = 0x40000EB8
 local mouse_input_address = 0x64C73C
 local zoom_address = read_dword(0x815918) + 204
+local camera_address = 0x647498
 
 local x_adjust = 0
 local z_adjust = 0
-	
+local reload_fix = 60
+
 set_callback("tick", "OnTick")
 set_callback("frame", "OnFrame")
 set_callback("map load", "OnMapLoad")
@@ -61,8 +64,9 @@ function OnMapLoad()
 end
 
 function OnCamera(cam_x, cam_y, cam_z, fov, x1, y1, z1, x2, y2, z2)
+	local camera_type = read_word(camera_address)
 	local player = get_dynamic_player()
-	if player ~= nil then
+	if camera == 30400 and player ~= nil then
 		local no_vehicle = read_dword(player + 0x11C) == 0xFFFFFFFF
 		local unzoomed = read_word(zoom_address) == 0xFFFF
 		
@@ -167,6 +171,13 @@ function OnFrame()
 				end
 			end
 			
+			if reload_fix > 0 then
+				local ready_fixer = 1/math.sqrt(reload_fix)
+				testx = testx*ready_fixer
+				testz = testz*ready_fixer
+				reload_fix = reload_fix - 1
+			end
+			
 			x = x + testx*weapon_animation_sway_amount
 			z = z + -testz*weapon_animation_sway_amount
 		end
@@ -242,6 +253,10 @@ function GetWPHI(meta_id)
 			HUD[tag_data][0x60]["direction"] = direction
 			HUD[tag_data][0x60]["direction_y"] = -1
 			HUD[tag_data][0x60]["count"] = read_u32(tag_data + 0x60 + 0)
+			--if tag_name == "weapons\\sniper rifle\\sniper rifle" and HUD[tag_data][0x60]["count"] > 0 then
+			--	HUD[tag_data][0x60]["count"] = 1
+			--end
+			
 			HUD[tag_data][0x60]["address"] = read_u32(tag_data + 0x60 + 4)
 			HUD[tag_data][0x60]["size"] = 180
 			HUD[tag_data][0x60]["x"] = 0x24
@@ -249,9 +264,18 @@ function GetWPHI(meta_id)
 			HUD[tag_data][0x60]["coord"] = {}
 			for i=0,HUD[tag_data][0x60]["count"]-1 do
 				local struct = HUD[tag_data][0x60]["address"] + i * HUD[tag_data][0x60]["size"]
+				
+				--Don't sway if it has multitex overlays
+				local multitex = read_dword(struct + 0x7C)
+				if multitex > 0 then
+					HUD[tag_data][0x60] = nil
+					break
+				end
+				
 				--if anchor ~= 4 then
 					HUD[tag_data][0x60]["coord"][i*2] = read_short(struct + HUD[tag_data][0x60]["x"])
 					HUD[tag_data][0x60]["coord"][i*2+1] = read_short(struct + HUD[tag_data][0x60]["y"])
+					
 					if anchor == 4 then
 						local bitmap = read_string(read_dword(struct + 0x4C))
 						if bitmap ~= nil then
@@ -390,7 +414,6 @@ function OnTick()
 			local show_hud = read_byte(0x400003bc) == 1
 			
 			if HUD == nil and no_vehicle and show_hud then
-				camera_address = 0x647498
 				camera_type = read_word(camera_address)
 				if camera_type ~= 23776 then
 					GetHUD()
@@ -506,7 +529,7 @@ function GetHUD()
 			end
 			HUD[tag_data] = {}
 			local bitmap = read_string(read_dword(tag_data + 0x4C))
-			if bitmap ~= "bourrin\\hud\\light\\weapons\\circle" then
+			if bitmap ~= "bourrin\\hud\\light\\weapons\\circle" and bitmap ~= "ui\\hud\\bitmaps\\combined\\hud_reticles" and bitmap ~= "ui\\hud\\hrx_bitmaps\\hrx_crosshairs\\hrx_crosshairs" and read_dword(tag_data + 0x48 + 0xC) ~= 0xFFFFFFFF then
 				HUD[tag_data][0x24] = {}
 				HUD[tag_data][0x24]["coord"] = read_i16(tag_data + 0x24)
 				HUD[tag_data][0x24]["direction"] = direction

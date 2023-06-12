@@ -4,7 +4,7 @@
 
 --CONFIG
 	
-	enable_third_person_cam = false
+	enable_third_person_cam = false -- default setting for when you start the game
 	
 	-- CAMERA POSITION
 		x_offset = 0.05				-- front/back
@@ -22,37 +22,16 @@
 		third_person_zoom = true	-- stays in third person when zoomed in
 		hide_scope_masks = true		-- only crosshair will be visible when zoomed in
 		smooth_zoom = true			-- if above is enabled then makes the camera zoom in smoothly
-		smooth_zoom_speed = 0.15	-- change how fast smooth zoom changes fov
+		smooth_zoom_speed = 0.08	-- change how fast smooth zoom changes fov
 	
 	-- RETICLE
-		hide_reticle_hud = false
+		second_reticle = true 		 --	another reticle that shows where shots will actually land (for most multiplayer maps)
+		second_reticle_bigass = true -- another reticle that shows where shots will actually land (for bigass v3)
+		
+		hide_reticle_hud = true
 		hide_multitex_overlay_hud = true -- hides stuff like dynamic reticles in some maps (if above is true)
 		adjust_reticle_position = true	-- changes where the reticle is based on your camera offset
 		adjust_reticle_amount = 4		-- how far reticle moves
-		
-		second_reticle = false 		-- adds a fake reticle that shows where your bullets will actually land
-		second_reticle_bigass = true -- same as above but for bigass v3
-		turn_reticle_red = false		-- turns reticle red when aimint at an enemy. not accurate!!!
-		reticle_type = 8			-- changes the bitmap. from 1 to 13
-		reticle_dot = true			-- use a dot instead of a bitmap chosen above
-		reticle_radius = 0.0075
-		reticle_brightness = 10
-		reticle_remove_when_cannot_fire = true -- hides the reticle while reloading, throwing grenade, etc
-		
-		reticle_color_red = 255 	-- 0 to 255
-		reticle_color_green = 0 	-- 0 to 255
-		reticle_color_blue = 0 		-- 0 to 255
-		reticle_color_alpha = 30 	-- 0 to 255
-		
-		reticle_occlusion = 1		-- occlusion radius (just like for lens flares)
-		reticle_fade_time = 0.99999 		-- bigger values leave trail and lower values flicker
-		reticle_distance = 5000 		-- very high values make movement more responsive but objects that are not bsp might get ignored
-		reticle_timer = 0.2		-- better don't touch this :v
-		reticle_count = 10 			-- increasing the count will increase the brightness
-		reticle_wiggle = 0.0045		-- makes the reticles move around uwu
-		
-		reticle_rotation_prediction_scale = 1
-		reticle_movement_prediction_scale = 1.5
 	
 	-- FIXES
 		fix_tp_animations = true 	-- fixes wrong animations playing when you see yourself in third person in multiplayer games
@@ -73,46 +52,20 @@
 --END OF CONFIG
 
 --todo
+--fix when third_person_zoom = false
+--should cancel weapon animations when switching weapon
 --animations get broken in some custom maps like snowcast (fixed?)
 --reload animation doesn't play sometimes
---some lights appear where dynamic crosshair is if second reticle is enabled
 
---v1.1 changes:
--- fixed crashes (hopefully)
--- fixed a bug that happened when playing on any map after playing on bigass
--- fixed dynamic reticle disappearing after teleporting
--- fixed animation bug that sometimes happened after switching weapons
--- added a dot dynamic reticle type that can be used instead of bitmaps
--- dynamic reticle can now be removed when the player cannot fire
--- dynamic reticle should be more responsive
--- removed sniper zoom hud stuff when third person zoom is enabled
-
---v1.2 changes:
--- camera now autocenters if it's about to get inside of BSP to avoid exploits (on servers only!)
--- added some hotkeys you can use to adjust camera position and turn on/off third person camera
--- fixed reload animation playing when picking up a new weapon if previous one required reloading
--- made first person animation sounds play in third person
--- improved the way scope masks are removed, should remove all stuff now
--- reticle position now automatically changes based on your camera view which makes shooting at long range much easier
--- fixed a crash related to removal of camera shake (no idea why it crashed in the first place)
-
--- 2021-01-09 changes:
--- fixed some issues related to second reticle (red dot)
--- fixed ammo icon appearing on the player in blood_covenant map
--- fixed some issues related to scripts getting reloaded while in third person
-
--- 2021-03-07 changes:
--- small fix for maps compiled using Invader
-
--- 2021-08-21 changes:
--- added no_firing_from_camera variable
-
+--CHANGELOG
 -- 2023-04-19 changes:
 -- second reticle in bigass will now turn red if aiming at an enemy and green if ally
 
 -- 2023-04-23 changes:
 -- fixed compability with balltze
 
+-- 2023-05-12
+-- replaced second reticle with a better alternative
 --don't touch this stuff >:v
 clua_version = 2.042
 
@@ -146,9 +99,10 @@ local ANIMATION_STATES = {
 
 local camera_address = 0x647498
 local keyboard_input_address = 0x64C550
-local mouse_input_address = 0x64C73C + 13
+local mouse_input_address = 0x64C73C
 local announcer_address = 0x64C020
 local fp_anim_address = 0x40000EB8
+local hud_address = 0x400007F4
 
 local sqrt = math.sqrt
 local abs = math.abs
@@ -156,6 +110,12 @@ local floor = math.floor
 local ceil = math.ceil
 local find = string.find
 
+local pi = math.pi
+local atan = math.atan
+local tan = math.tan
+local sin = math.sin
+local cos = math.cos
+local rad = math.rad
 
 set_callback("tick", "OnTick")
 set_callback("map load", "OnMapLoad")
@@ -171,13 +131,16 @@ local map_is_protected = false
 local find_camera_track = true
 local bigassv3 = false
 local current_fov = 1.4
+local offset_amount = 0.37 -- was 33
+local PROJECTILE = {}
+
+local changed = false
+local needle_found = false
 
 function OnMapLoad()
 	if debug_messages then
 		console_out("If you encounter a glitch or a crash then tell aLTis")
 	end
-	reticle_radius_address = nil
-	reticle_wiggle_address = nil
 	
 	DEFAULT_SOUND_VOLUMES = nil
 	SCOPE_MASKS = nil
@@ -188,17 +151,20 @@ function OnMapLoad()
 	protected_camera_track = nil
 	find_camera_track = true
 	map_is_protected = false
+	changed = false
+	needle_found = false
+	PROJECTILE = {}
 	set_timer(600, "ChangeCameraTrack")
 	set_timer(700, "RemoveCameraShake")
 end
 
 function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
-	local player = get_dynamic_player()
+	player = get_dynamic_player()
 	
 	-- HOTKEYS
 	local chat_is_open = read_byte(0x0064E788)
 	if chat_is_open == 0 and console_is_open() == false and player ~= nil then
-		if read_byte(keyboard_input_address + 85) == 1 or (toggle_tp_mouse_key ~= -1 and read_byte(mouse_input_address + toggle_tp_mouse_key) == 1) then
+		if read_byte(keyboard_input_address + 85) == 1 or (toggle_tp_mouse_key ~= -1 and read_byte(mouse_input_address + 13 + toggle_tp_mouse_key) == 1) then
 			if enable_third_person_cam then
 				OnCommand("tp 0")
 			else
@@ -206,7 +172,7 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 			end
 		end
 		if enable_third_person_cam then
-			if read_byte(keyboard_input_address + 99) == 1 or (switch_directions_mouse_key ~= -1 and read_byte(mouse_input_address + switch_directions_mouse_key) == 1) then
+			if read_byte(keyboard_input_address + 99) == 1 or (switch_directions_mouse_key ~= -1 and read_byte(mouse_input_address + 13 + switch_directions_mouse_key) == 1) then
 				y_offset = y_offset*-1
 			elseif read_byte(keyboard_input_address + 101) > 0 then
 				camera_distance_multiplier = camera_distance_multiplier - 0.005
@@ -245,6 +211,12 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 
 	if enable_third_person_cam == false then return end
 	if third_person_camera then
+		
+			if reticle_is_red then
+				write_dword(hud_address+216, 1)
+			else
+				write_dword(hud_address+216, 0)
+			end
 		
 		current_fov = fov
 		camera_x1 = x1
@@ -336,12 +308,6 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 			new_fov = fov
 			dynamic_offset_amount = camera_offset_amount
 			
-			if reticle_radius_address ~= nil and reticle_wiggle_address ~= nil then
-				write_float(reticle_wiggle_address, reticle_wiggle)
-				write_float(reticle_radius_address, reticle_radius)
-				write_float(reticle_radius_address + 4, reticle_radius)
-			end
-			
 			if player ~= nil then
 				
 				local magnification_level = 1
@@ -363,12 +329,6 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 								magnification_level = read_float(weap_tag + 0x3DC + 4*zoom_level)
 								if magnification_level == 0 then
 									magnification_level = 1
-								end
-								
-								if reticle_radius_address ~= nil and reticle_wiggle_address ~= nil then
-									write_float(reticle_wiggle_address, reticle_wiggle/magnification_level)
-									write_float(reticle_radius_address, reticle_radius/magnification_level)
-									write_float(reticle_radius_address + 4, reticle_radius/magnification_level)
 								end
 								
 								if fov ~= fov/magnification_level and magnification_level ~= 0 then
@@ -409,20 +369,212 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 						end
 					end
 					
+					-- SECOND RETICLE
+					if (needle_found or bigassv3) and player_x ~= nil then
+						
+						for projectile_spawn_time, proj in pairs (PROJECTILE) do
+							local time_since_spawn = ticks() - projectile_spawn_time
+							local object = get_object(proj)
+							if time_since_spawn > 1 then
+								if object then
+									
+									local bitmap = 0
+									local color = GetReticleColor(object)
+									local x2 = read_float(object + 0x2B0+0x28)
+									local y2 = read_float(object + 0x2B0+0x2C)
+									local z2 = read_float(object + 0x2B0+0x30)
+									local parent = get_object(read_dword(object + 0x11C))
+									if parent then
+										local node = parent + 0x550 + read_dword(object + 0x120) * 0x34
+										--console_out(read_dword(object + 0x120))
+										x2 = read_float(node+0x28)
+										y2 = read_float(node+0x2C)
+										z2 = read_float(node+0x30)
+									else
+										--local dist = sqrt((x2-player_x)*(x2-player_x) + (y2-player_y)*(y2-player_y) + (z2-player_z)*(z2-player_z))
+										local dist = read_float(object + 0x250)
+										if dist < 1 then
+											bitmap = 1
+										end
+										
+										--console_out(dist)
+									end
+									
+									FindProjectilePosition(x-x2, y-y2, z-z2, bitmap, color)
+									delete_object(proj)
+								else
+									--console_out(time_since_spawn)
+									FindProjectilePosition(x - player_x - camera_x1*offset_amount, y - player_y - camera_y1*offset_amount, z - player_z - camera_z1*offset_amount, 1)
+								end
+								
+								PROJECTILE[projectile_spawn_time] = nil
+							else
+								--console_out(time_since_spawn)
+							end
+						end
+						
+						SpawnProjectile()
+					end
+					
+					
+					
 					previous_zoom_level = zoom_level
 					current_fov = new_fov
 					return x, y, z, new_fov, x1, y1, z1, x2, y2, z2
+				else
+					DeleteProjectiles()
 				end
-			elseif check_gun ~= nil then
-				local object = get_object(check_gun)
-				if object ~= nil then
-					delete_object(check_gun)
+				
+			else
+				DeleteProjectiles()
+				if check_gun ~= nil then
+					local object = get_object(check_gun)
+					if object ~= nil then
+						delete_object(check_gun)
+					end
+					check_gun = nil
 				end
-				check_gun = nil
 			end
 		end
 	end
 	return x, y, z, fov, x1, y1, z1, x2, y2, z2
+end
+
+function DeleteProjectiles()
+	for projectile_spawn_time, proj in pairs (PROJECTILE) do
+		local object = get_object(proj)
+		if object then
+			local obj_type = read_word(object + 0xB4)
+			if obj_type == 5 then
+				--console_out("deleted projectile")
+				delete_object(proj)
+			end
+		end
+		--console_out("removed projectile")
+		PROJECTILE[projectile_spawn_time] = nil
+	end
+end
+
+function GetReticleColor(object)
+	local parent = get_object(read_dword(object + 0x11C))
+	local color = "blue"
+	if parent ~= nil then
+		local player_team = read_word(player + 0xB8)
+		--console_out(player_team)
+		local grandparent = get_object(read_dword(parent + 0x11C))
+		if grandparent then
+			parent = grandparent
+		end
+		
+		if read_word(parent + 0xB4) == 0 then
+			bitmap = 0
+			local target_team = read_word(parent + 0xB8)
+			--console_out("target team "..target_team)
+			if player_team ~= target_team then
+				color = "red"
+			elseif player_team == target_team then
+				if player == parent then
+					bitmap = 1
+				else
+					color = "green"
+				end
+			end
+		end
+	end
+	
+	return color
+end
+
+function FindProjectilePosition(x, y, z, bitmap, color)
+	--if bitmap == 1 then
+	--	SetBigassReticle(0, 0, bitmap, color)
+	--	return
+	--end
+	CalculateFov(new_fov)
+	local ssx, ssy = FindSunInScreenSpace(x,y,z, 0, 0, 0, camera_x1, camera_y1, camera_z1, vertical_fov)
+	
+	local some_offset_idk_lol = 9
+	local some_offset_idk_lol2 = 5
+	if build > 0 then
+		some_offset_idk_lol = 7.5
+		some_offset_idk_lol2 = 4.2
+	end
+	
+	ssx = -floor((50-ssx*100)*some_offset_idk_lol)
+	ssy = floor((50-ssy*100)*some_offset_idk_lol2)
+	
+	
+	-- ADJUST FOR MOUSE INPUT TO PREDICT RETICLE POSITION
+	local chat_is_closed = read_byte(0x0064E788) ~= 1
+	local game_paused = read_byte(0x622058) == 1
+	
+	if chat_is_closed and game_paused and bitmap == 0 then
+		local ehh = 1
+		local mouse_right = read_long(mouse_input_address)
+		local mouse_up = read_long(mouse_input_address+4)
+		
+		if FML then
+			local avg_right = 0
+			local avg_up = 0
+			for i=0,#FML-1 do
+				avg_right = avg_right + i
+				if i < #FML then
+					FML[i] = FML[i+1]
+				else
+					FML[i] = mouse_right
+				end
+				
+				if i < #FML2 then
+					FML2[i] = FML2[i+1]
+				else
+					FML2[i] = mouse_up
+				end
+			end
+			mouse_right = (mouse_right + avg_right)/(#FML)
+			mouse_up = (mouse_up + avg_up)/(#FML2)
+		else
+			FML = {}
+			FML2 = {}
+			for i=0,1 do
+				FML[i] = 0;
+				FML2[i] = 0;
+			end
+		end
+		
+		ssx = floor(ssx + mouse_right*ehh)
+		ssy = floor(ssy - mouse_up*ehh)
+	end
+	
+	SetBigassReticle(ssx, ssy, bitmap, color)
+end
+
+function SpawnProjectile()
+	if player_x == nil then return end
+	
+	local new_proj
+	
+	if bigassv3 then
+		new_proj = spawn_object("proj", "altis\\effects\\distance_check", player_x + player_x_vel +  camera_x1*offset_amount, player_y + player_y_vel + camera_y1*offset_amount, player_z + player_z_vel + camera_z1*offset_amount)
+	else
+		new_proj = spawn_object("proj", "weapons\\needler\\needle", player_x +  camera_x1*offset_amount, player_y + camera_y1*offset_amount, player_z + camera_z1*offset_amount)
+	end
+	local object = get_object(new_proj)
+	if object ~= nil then
+		local projectile_velocity = 75
+		write_float(object + 0x68, camera_x1 * projectile_velocity)
+		write_float(object + 0x6C, camera_y1 * projectile_velocity)
+		write_float(object + 0x70, camera_z1 * projectile_velocity)
+		write_float(object + 0x254, camera_x1 * projectile_velocity)
+		write_float(object + 0x258, camera_y1 * projectile_velocity)
+		write_float(object + 0x25C, camera_z1 * projectile_velocity)
+		--projectile_spawn_time = ticks()
+	else
+		new_proj = nil
+	end
+	
+	if new_proj then
+		PROJECTILE[ticks()] = new_proj
+	end
 end
 
 function ToggleScopeMasks(enable)
@@ -697,8 +849,6 @@ function OnTick()
 			local camera_mode = read_short(camera_address)
 			local zoom_level = read_u8(player + 0x320)
 			
-			BigassReticle()
-			
 			if vehicle ~= nil then
 				if hide_reticle_hud then
 					ReticeHud(true)
@@ -711,6 +861,8 @@ function OnTick()
 					check_gun = nil
 				end
 				
+				DeleteProjectiles()
+				SetBigassReticle(9999,9999, 0)
 				if bigassv3 then
 					if find(GetName(vehicle), "taunt") then
 						write_float(camera_address + 0x150, 0)
@@ -775,103 +927,15 @@ function OnTick()
 							end
 						end
 					end
-					
-					
-					if camera_x1 ~= nil and second_reticle and map_is_protected == false and bigassv3 == false then
-						if (reticle_gun == nil or get_object(reticle_gun) == nil) and PrepareReticleTags() then
-							reticle_gun = spawn_object("weap", "weapons\\gravity rifle\\gravity rifle", player_x, player_y, player_z)
-							local object = get_object(reticle_gun)
-							if object ~= nil and server_type ~= "local" then
-								if GetName(object) ~= "weapons\\gravity rifle\\gravity rifle" then
-									local globals_tag = get_tag("matg", "globals\\globals")
-									if globals_tag ~= nil then
-										globals_tag = read_dword(globals_tag + 0x14)
-										local weapons_count = read_dword(globals_tag + 0x14C)
-										local weapons_address = read_dword(globals_tag + 0x14C + 4)
-										for k=0,weapons_count - 1 do
-											local address = weapons_address + k * 16
-											local reticle_gun_tag = get_tag("weap", "weapons\\gravity rifle\\gravity rifle")
-											write_dword(address, read_dword(reticle_gun_tag))
-											write_dword(address + 0xC, read_dword(reticle_gun_tag + 0xC))
-										end
-									end
-								end
-							end
-						end
-						if reticle_gun ~= nil then
-							local object = get_object(reticle_gun)
-							if object ~= nil then
-								local distance = GetDistance(object, player, camera_height)
-								if GetName(object) ~= "weapons\\gravity rifle\\gravity rifle" or distance > 2 then
-									RemoveReticleGun()
-								else
-									if turn_reticle_red and read_dword(0x400008CC) == 1 then
-										ReticleColor(true)
-									else
-										ReticleColor(false)
-									end
-									
-									if reticle_remove_when_cannot_fire and reticle_lifetime_address ~= nil then
-										--local unit_able_to_fire = read_byte(player + 0x2B7) == 1
-										local weapon_slot = read_byte(player + 0x2F4)
-										local weapon_id = read_dword(player + 0x2F8 + weapon_slot * 4)
-										local object = get_object(weapon_id)
-										if object ~= nil then
-											local melee_state = read_bit(object + 0x230, 4)
-											local ready_timer = read_word(object + 0x23A)
-											local reload_timer = read_word(object + 0x2B2)
-											if melee_state == 0 and ready_timer == 0 and reload_timer == 0 then
-												write_float(reticle_lifetime_address, reticle_timer)
-												write_float(reticle_lifetime_address + 4, reticle_timer)
-											else
-												write_float(reticle_lifetime_address, 0)
-												write_float(reticle_lifetime_address + 4, 0)
-											end
-										end
-									end
-									
-									--make it not respawn (doesn't work?)
-									write_dword(object + 0x204, 0xF000000)
-									
-									local offset_amount = 0.1
-									write_float(object + 0x5C, player_x + camera_x1*offset_amount + player_x_vel*reticle_movement_prediction_scale)
-									write_float(object + 0x60, player_y + camera_y1*offset_amount + player_y_vel*reticle_movement_prediction_scale)
-									write_float(object + 0x64, player_z + camera_z1*offset_amount + player_z_vel*reticle_movement_prediction_scale)
-									write_float(object + 0x68, player_x_vel)
-									write_float(object + 0x6C, player_y_vel)
-									write_float(object + 0x70, player_z_vel)
-									if previous_camera_x1 ~= nil then
-										local x_rot_offset = (camera_x1 - previous_camera_x1)*reticle_rotation_prediction_scale
-										x_rot_offset = x_rot_offset*x_rot_offset*x_rot_offset*50
-										local y_rot_offset = (camera_y1 - previous_camera_y1)*reticle_rotation_prediction_scale
-										y_rot_offset = y_rot_offset*y_rot_offset*y_rot_offset*50
-										local z_rot_offset = (camera_z1 - previous_camera_z1)*reticle_rotation_prediction_scale
-										z_rot_offset = z_rot_offset*z_rot_offset*z_rot_offset*50
-										--console_out(x_rot_offset)
-										write_float(object + 0x74, camera_x1 + x_rot_offset)
-										write_float(object + 0x78, camera_y1 + y_rot_offset)
-										write_float(object + 0x7C, camera_z1 + z_rot_offset)
-									end
-									write_float(object + 0x80, camera_x2)
-									write_float(object + 0x84, camera_y2)
-									write_float(object + 0x88, camera_z2)
-									write_float(object + 0x8C, 0)
-									write_float(object + 0x90, 0)
-									write_float(object + 0x94, 0)
-									previous_camera_x1 = camera_x1
-									previous_camera_y1 = camera_y1
-									previous_camera_z1 = camera_z1
-								end
-							end
-						end
-					end
 				end
+			else
+				player_x = nil
 			end
+			
+			BigassReticle()
+		else
+			player_x = nil
 		end
-	end
-	
-	if third_person_camera == false then
-		RemoveReticleGun()
 	end
 	
 	-- SOUNDS
@@ -1027,147 +1091,99 @@ function CheckBigassWeapons(name)
 	end
 end
 
-function GetBigassAspectRatio()
-	local dmr_hud = read_dword(get_tag("wphi", "bourrin\\hud\\v3\\interfaces\\dmr") + 0x14)
-	local static_address = read_dword(dmr_hud + 0x64)
-	return read_float(static_address + 0x28)
-end
-
 function BigassReticle()
-	if bigassv3 == false or second_reticle_bigass == false or camera_x1 == nil or player_x == nil then return end
+	if (needle_found == false and bigassv3 == false) or camera_x1 == nil or player_x == nil then return end
 	
 	local weapon_slot = read_byte(player + 0x2F4)
 	local weapon_id = read_dword(player + 0x2F8 + weapon_slot * 4)
 	local object = get_object(weapon_id)
 	if vehicle ~= nil or object == nil or CheckBigassWeapons(GetName(object)) then
 	
-		SetBigassReticle(999,999, 0)
-		if projectile ~= nil and get_object(projectile) ~= nil then
-			delete_object(projectile)
-			projectile = nil
-		end
-	elseif projectile ~= nil and get_object(projectile) ~= nil then
-		local zoom_level = read_u8(player + 0x320)
-		local object = get_object(projectile)
-		local distance = GetDistance(object, player, camera_height)
-		local min_dist = 1.7
-		local bitmap = 0
-		local player_team = read_word(player + 0xB8)
-		local color = "blue"
-		--console_out("player team "..player_team)
+		SetBigassReticle(9999,9999, 0)
+	--	if projectile ~= nil and get_object(projectile) ~= nil then
+	--		delete_object(projectile)
+	--		projectile = nil
+	--	end
+	--elseif projectile ~= nil and get_object(projectile) ~= nil then
+	
+	--else
 		
-		if distance > 50 then
-			distance = 50
-		elseif distance < min_dist then
-			distance = min_dist
-			bitmap = 1
-		end
 		
-		local parent = get_object(read_dword(object + 0x11C))
-		if parent ~= nil then
-			if read_word(parent + 0xB4) == 0 then
-				bitmap = 0
-				local target_team = read_word(parent + 0xB8)
-				--console_out("target team "..target_team)
-				if player_team ~= target_team then
-					color = "red"
-				elseif player_team == target_team then
-					if player == parent then
-						bitmap = 1
-					else
-						color = "green"
-					end
-				end
-			end
-		end
-		
-		local fov_offset = 1/current_fov*90 - 28
-		--console_out(fov_offset)
-		distance = sqrt((50 - distance)) * fov_offset * 1.15/distance
-		
-		if distance < 10 or (abs(y_offset) < 0.1 and abs(z_offset) < 0.25) then
-			SetBigassReticle(9999,9999, bitmap)
-		else
-			local aspect_change = GetBigassAspectRatio()
-			local x_offset = floor(distance * y_offset * dynamic_offset_amount *4/3*aspect_change)
-			if third_person_zoom == false and zoom_level < 255 then
-				x_offset = 0
-			end
-			--console_out(z_offset)
-			local z_offset = floor(distance * z_offset * dynamic_offset_amount*1.5 - distance*camera_distance_multiplier*0.2 )
-			
-			if y_offset < 0 and x_offset > 0 then
-				x_offset = 0
-			end
-			
-			SetBigassReticle(x_offset,z_offset, bitmap, color)
-		end
-		
-		delete_object(projectile)
-		projectile = nil
-	else
-		local offset_amount = 0.37 -- was 33
-		projectile = spawn_object("proj", "altis\\effects\\distance_check", player_x + player_x_vel +  camera_x1*offset_amount, player_y + player_y_vel + camera_y1*offset_amount, player_z + player_z_vel + camera_z1*offset_amount)
-		local object = get_object(projectile)
-		if object ~= nil then
-			local projectile_velocity = 55
-			write_float(object + 0x68, camera_x1 * projectile_velocity)
-			write_float(object + 0x6C, camera_y1 * projectile_velocity)
-			write_float(object + 0x70, camera_z1 * projectile_velocity)
-			write_float(object + 0x254, camera_x1 * projectile_velocity)
-			write_float(object + 0x258, camera_y1 * projectile_velocity)
-			write_float(object + 0x25C, camera_z1 * projectile_velocity)
-		end
 	end
 end
 
 function SetBigassReticle(x, z, bitmap, color)
+	--if true then return end
 	local tag = get_tag("unhi", "bourrin\\hud\\h1 symmetrical")
+	local needle = false
+	if tag == nil then
+		tag = get_tag("unhi", "ui\\hud\\cyborg")
+		needle = true
+	end
 	if tag ~= nil then
 		tag = read_dword(tag + 0x14)
+		
+		--Chimera 1.0 hud scaling fix
+		if build > 0 and x ~= 9999 then
+			if x > 160 then
+				x = 160
+			elseif x < -160 then
+				x = -160
+			end
+			
+			if z > 165 then
+				z = 165
+			elseif z < -165 then
+				z = -165
+			end
+		end
+		
+		if needle then
+			x = 298-x
+			z = 218+z
+		end
+		
 		write_short(tag + 0x24, x)
 		write_short(tag + 0x26, z)
-		write_short(tag + 0x78, bitmap)
+		
+		if bigassv3 then
+			write_short(tag + 0x78, bitmap)
+		end
+		
+		if color == "red" then
+			reticle_is_red = true
+		else
+			reticle_is_red = false
+		end
 		
 		if bitmap == 0 then
-			write_byte(tag + 0x58, 255)
-			write_byte(tag + 0x58+1, 150)
-			write_byte(tag + 0x58+2, 40)
-			write_byte(tag + 0x58+3, 100)
-			
-			if color ~= nil then
-				if color == "blue" then
-					write_byte(tag + 0x58, 255)
-					write_byte(tag + 0x59, 150)
-					write_byte(tag + 0x5A, 40)
-				elseif color == "red" then
-					write_byte(tag + 0x58, 0)
-					write_byte(tag + 0x59, 0)
-					write_byte(tag + 0x5A, 255)
-				else
-					write_byte(tag + 0x58, 0)
-					write_byte(tag + 0x59, 255)
-					write_byte(tag + 0x5A, 0)
-				end
+			if color == nil or color == "blue" then
+				WriteColor(tag + 0x58, 255, 150, 40, 100)
+			elseif color == "red" then
+				WriteColor(tag + 0x58, 0, 0, 255, 100)
+			else
+				WriteColor(tag + 0x58, 0, 255, 0, 100)
 			end
 		else
-			write_byte(tag + 0x58, 0)
-			write_byte(tag + 0x58+1, 0)
-			write_byte(tag + 0x58+2, 255)
-			write_byte(tag + 0x58+3, 255)
+			WriteColor(tag + 0x58, 0, 60, 255, 255)
 		end
 	end
 end
 
-function ReticeHud(show)
-	if map_is_protected or (second_reticle and reticle_gun == nil) then 
-		show = true
-		--if map_is_protected then
-		--	console_out("protected")
-		--else
-		--	console_out("reticle gun")
-		--end
+function WriteColor(address, blue, green, red, alpha)
+	write_byte(address, blue)
+	write_byte(address+1, green)
+	write_byte(address+2, red)
+	if alpha ~= nil then
+		write_byte(address+3, alpha)
 	end
+end
+
+function ReticeHud(show)
+	if map_is_protected or (needle_found == false and second_reticle) then 
+		show = true
+	end
+	
 	if show then
 		execute_script("hud_show_crosshair 1")
 		--console_out("show")
@@ -1215,201 +1231,86 @@ function RemoveMultitex(hud_tag)
 	end
 end
 
-function PrepareReticleTags()
-	if map_is_protected then
+function GetBitmapScale(id, bitmap)
+	local bitmap_tag = read_dword(bitmap + 0x14)
+	local count = read_dword(bitmap_tag + 0x60)
+	if id > count then
+		return 1
+	end
+	local address = read_dword(bitmap_tag + 0x64)
+	local struct = address + id*48
+	return 64/read_word(struct + 0x04)
+end
+
+function PrepareNeedlerTags()
+	if second_reticle == false or map_is_protected or bigassv3 or needle_found or server_type == "none" then
 		return false
 	end
 	
-	if bigassv3 then return true end
+	local proj_tag = get_tag("proj", "weapons\\needler\\needle")
+	local hud_tag = get_tag("unhi", "ui\\hud\\cyborg")
+	local bitmap_tag = get_tag("bitm", "ui\\hud\\bitmaps\\combined\\hud_reticles")
 	
-	if (get_tag("weap", "weapons\\gravity rifle\\gravity rifle") == nil or get_tag("effe", "weapons\\assault rifle\\effects\\impact engineer sack") == nil or get_tag("effe", "effects\\coop teleport") == nil) then
-		return false
+	local hd_bitmap = false
+	if bitmap_tag == nil then
+		bitmap_tag = get_tag("bitm", "ui\\hud\\hrx_bitmaps\\hrx_crosshairs\\hrx_crosshairs")
+		if bitmap_tag then
+			hd_bitmap = true
+		end
 	end
-	if hide_reticle_hud then
-		ReticeHud(false)
-	else
-		ReticeHud(true)
-	end
-	local weap_tag = get_tag("weap", "weapons\\gravity rifle\\gravity rifle")
-	if weap_tag ~= nil then
-		weap_tag = read_dword(weap_tag + 0x14)
-		write_bit(weap_tag + 0x02, 1, 1)
-		write_bit(weap_tag + 0x02, 0, 1)
-		write_float(weap_tag + 0x20, 0)	-- disable acceleration
-		write_string(weap_tag + 0x30C, "disabled") -- make it so player couldn't pick it up
+	
+	if proj_tag and hud_tag and bitmap_tag then
+		needle_found = true
+		--console_out("needler :)")
+		local bitmap_scale = GetBitmapScale(7, bitmap_tag)
 		
-		local attachment_count = read_dword(weap_tag + 0x140)
-		local attachment_address = read_dword(weap_tag + 0x144)
-		if attachment_count > 0 then
-			write_word(attachment_address + 0x30, 0)
-			local effect_tag = get_tag("effe", "weapons\\assault rifle\\effects\\impact engineer sack")
-			if effect_tag ~= nil then
-				write_dword(attachment_address, read_dword(effect_tag))
-				write_dword(attachment_address + 0xC, read_dword(effect_tag + 0xC))
-				effect_tag = read_dword(effect_tag + 0x14)
-				write_word(effect_tag, 2)--cannot optimize out
-				local locations = read_dword(effect_tag + 0x28 + 4)
-				write_string(locations, "")
-				local events_count = read_dword(effect_tag + 0x34)
-				local events_address = read_dword(effect_tag + 0x38)
-				for j=0,events_count-1 do
-					local address = events_address + j*68
-					write_float(address + 0x08, 0)
-					write_float(address + 0x0C, 0)
-					write_float(address + 0x10, 0)
-					write_float(address + 0x14, 0)
-					local particle_count = read_dword(address + 0x38)
-					local particle_address = read_dword(address + 0x38 + 4)
-					for k=0,particle_count-1 do
-						local address = particle_address + k*232
-						if j == 0 and k == 0 then
-							local particle_tag = get_tag("part", "effects\\particles\\solid\\blood engineer trails")
-							if particle_tag ~= nil then
-								write_dword(address + 0x54, read_dword(particle_tag))
-								write_dword(address + 0x54 + 0xC, read_dword(particle_tag + 0xC))
-								particle_tag = read_dword(particle_tag + 0x14)
-								
-								reticle_lifetime_address = particle_tag + 0x38
-								write_float(reticle_lifetime_address, reticle_timer) --lifetime
-								write_float(reticle_lifetime_address + 4, reticle_timer) --lifetime
-								write_float(particle_tag + 0x44, 0) --fade out time
-								
-								local physics_tag = get_tag("pphy", "effects\\point physics\\rubber")
-								if physics_tag ~= nil then
-									write_dword(particle_tag + 0x14, read_dword(physics_tag))
-									write_dword(particle_tag + 0x14 + 0xC, read_dword(physics_tag + 0xC))
-									physics_tag = read_dword(physics_tag + 0x14)
-									write_bit(physics_tag, 0, 0)--flamethrower coll
-									write_bit(physics_tag, 5, 1)
-									write_float(physics_tag + 0x20, 10000)--density
-									write_float(physics_tag + 0x24, 0)--air friction
-									write_float(physics_tag + 0x28, 1)--water friction
-									write_float(physics_tag + 0x2C, 1)--surface friction
-									write_float(physics_tag + 0x30, 0)--elasticity
-								end
-								
-								local effect_tag = get_tag("effe", "effects\\coop teleport")
-								if effect_tag ~= nil then
-									write_dword(particle_tag + 0x58, read_dword(effect_tag))
-									write_dword(particle_tag + 0x58 + 0xC, read_dword(effect_tag + 0xC))
-									effect_tag = read_dword(effect_tag + 0x14)
-									write_word(effect_tag, 2)--cannot optimize out
-									local events_address = read_dword(effect_tag + 0x38)
-									write_float(events_address + 0x08, 0)
-									write_float(events_address + 0x0C, 0)
-									write_float(events_address + 0x10, 0)
-									write_float(events_address + 0x14, 0)
-									
-									local parts_count = read_dword(events_address + 0x2C)
-									local parts_address = read_dword(events_address + 0x2C + 4)
-									for l=0,parts_count-1 do
-										local address = parts_address + l*104
-										if l == 1 then
-											local light_tag = get_tag("ligh", "effects\\lights\\coop teleport circular")
-											if light_tag ~= nil then
-												light_tag = read_dword(light_tag + 0x14)
-												write_bit(light_tag, 1, 1)--no specular
-												write_float(light_tag + 0x04, 0)--radius
-												write_float(light_tag + 0x38, reticle_color_alpha/255)
-												write_float(light_tag + 0x48, reticle_color_alpha/255)
-												write_float(light_tag + 0x38+4, reticle_color_red/255)
-												write_float(light_tag + 0x48+4, reticle_color_red/255)
-												write_float(light_tag + 0x38+8, reticle_color_green/255)
-												write_float(light_tag + 0x48+8, reticle_color_green/255)
-												write_float(light_tag + 0x38+12, reticle_color_blue/255)
-												write_float(light_tag + 0x48+12, reticle_color_blue/255)
-												
-												local lens_tag = get_tag("lens", "effects\\lights\\coop teleport circular")
-												if lens_tag ~= nil then
-													lens_tag = read_dword(lens_tag + 0x14)
-													write_float(lens_tag + 0x10, reticle_occlusion)
-													local reflection_address = read_dword(lens_tag + 0xC8)
-													write_bit(reflection_address, 1, 1)
-													write_byte(reflection_address + 0x04, reticle_type) -- bitmap index!
-													write_float(reflection_address + 0x28, reticle_radius)--radius
-													write_float(reflection_address + 0x2C, reticle_radius)--radius
-													reticle_radius_address = reflection_address + 0x28
-													write_float(reflection_address + 0x34, reticle_brightness)--brightness
-													write_float(reflection_address + 0x38, reticle_brightness)--brightness
-													reticle_color_address = reflection_address + 0x40
-													--write_float(reflection_address + 0x40, reticle_color_alpha/255)
-													--write_float(reflection_address + 0x40+4, reticle_color_red/255)
-													--write_float(reflection_address + 0x40+8, reticle_color_green/255)
-													--write_float(reflection_address + 0x40+12, reticle_color_blue/255)
-													
-													local bitmap_tag = get_tag("bitm", "ui\\hud\\bitmaps\\combined\\hud_reticles")
-													if reticle_dot == true or bitmap_tag == nil then
-														write_dword(lens_tag + 0x20, 0xFFFFFFFF)
-														write_dword(lens_tag + 0x20 + 0xC, 0xFFFFFFFF)
-													elseif bitmap_tag ~= nil then
-														write_dword(lens_tag + 0x20, read_dword(bitmap_tag))
-														write_dword(lens_tag + 0x20 + 0xC, read_dword(bitmap_tag + 0xC))
-													end
-												end
-												
-												write_float(light_tag + 0xF4, reticle_fade_time) --timer in ticks
-												write_word(light_tag + 0xFA, 2)--very late and stuff
-											end
-										else
-											write_dword(address + 0x18, 0xFFFFFFFF)
-											write_dword(address + 0x18 + 0xC, 0xFFFFFFFF)
-										end
-									end
-									
-									local particle_count = read_dword(events_address + 0x38)
-									local particle_address = read_dword(events_address + 0x38 + 4)
-									for m=0,particle_count-1 do
-										local address = particle_address + m*232
-										write_word(address + 0x6C, 0)
-										write_word(address + 0x6E, 0)
-									end
-								end
-							end
-							write_float(address + 0x0C, 0)
-							write_float(address + 0x10, 0)
-							write_bit(address + 0x64, 0, 0)
-							write_word(address + 0x6C, reticle_count)--count
-							write_word(address + 0x6C + 4, reticle_count)--count
-							write_float(address + 0x84, reticle_distance)-- velocity
-							write_float(address + 0x88, reticle_distance)-- velocity
-							write_float(address + 0x8C, reticle_wiggle)
-							reticle_wiggle_address = address + 0x8C
-							write_float(address + 0xA0, 0.0001)--radius
-							write_float(address + 0xA4, 0.0001)--radius
-						else
-							write_word(address + 0x6C, 0)
-							write_word(address + 0x6E, 0)
-						end
-					end
-				end
+		local tag = read_dword(proj_tag + 0x14)
+		hud_tag = read_dword(hud_tag + 0x14)
+		local tag_name = read_dword(bitmap_tag + 0x10)
+		bitmap_tag = read_dword(bitmap_tag + 0xC)
+		write_dword(hud_tag + 0x48 + 0xC, bitmap_tag)
+		write_dword(hud_tag + 0x4C, tag_name)
+		write_float(hud_tag + 0x28, bitmap_scale) -- width
+		write_float(hud_tag + 0x2C, bitmap_scale) -- height
+		write_short(hud_tag + 0x24, 298)
+		write_short(hud_tag + 0x26, 219)
+		write_short(hud_tag + 0x78, 7)
+		
+		write_dword(tag + 0x28 + 0xC, 0xFFFFFFFF) -- model
+		write_dword(tag + 0x140, 0) -- attachments
+		write_dword(tag + 0x14C, 0) -- widgets
+		write_word(tag + 0x180, 0) -- detonation timer starts
+		write_word(tag + 0x182, 0) -- projectile impact noise
+		write_dword(tag + 0x18C + 0xC, 0xFFFFFFFF) -- super detonation
+		write_dword(tag + 0x1AC + 0xC, 0xFFFFFFFF) -- detonation effect
+		write_float(tag + 0x1C4, 0) -- minimum velocity
+		write_float(tag + 0x1BC, 0.3) -- timer from
+		write_float(tag + 0x1C0, 0.3) -- timer to
+		write_float(tag + 0x1C8, 10000) -- max range
+		write_float(tag + 0x1EC, 0) -- guided veolicty
+		write_dword(tag + 0x204 + 0xC, 0xFFFFFFFF) -- flyby sound
+		write_dword(tag + 0x214 + 0xC, 0xFFFFFFFF) -- attached detonation
+		write_dword(tag + 0x224 + 0xC, 0xFFFFFFFF) -- impact damage
+		
+		local response_count = read_dword(tag + 0x240 + 0)
+		local response_address = read_dword(tag + 0x240 + 4)
+		for i=0,response_count-1 do
+			local struct = response_address + i*160
+			write_dword(struct + 0x04 + 0xC, 0xFFFFFFFF) -- default effect
+			write_dword(struct + 0x3C + 0xC, 0xFFFFFFFF) -- potential effect
+			write_float(struct + 0x90, 1) -- initial friction
+			write_float(struct + 0x98, 1) -- parallel friction
+			write_float(struct + 0x9C, 1) -- perpendicular friction
+			if i == 21 or i == 22 then -- if cyborg
+				write_word(struct + 0x02, 4) -- default response
+				write_word(struct + 0x24, 4) -- potential response
+			else
+				write_word(struct + 0x02, 2) -- default response
+				write_word(struct + 0x24, 2) -- potential response
 			end
 		end
-	end
-	return true
-end
-
-function ReticleColor(red)
-	if reticle_color_address ~= nil then
-		if red then
-			write_float(reticle_color_address, 0)
-			write_float(reticle_color_address+4, 1)
-			write_float(reticle_color_address+8, 0)
-			write_float(reticle_color_address+12, 0)
-		else
-			write_float(reticle_color_address, reticle_color_alpha/255)
-			write_float(reticle_color_address+4, reticle_color_red/255)
-			write_float(reticle_color_address+8, reticle_color_green/255)
-			write_float(reticle_color_address+12, reticle_color_blue/255)
-		end
-	end
-end
-
-function RemoveReticleGun()
-	if reticle_gun ~= nil then
-		if get_object(reticle_gun) ~= nil then
-			delete_object(reticle_gun)
-		end
-		reticle_gun = nil
+	else
+		--no needler :(
 	end
 end
 
@@ -1429,7 +1330,6 @@ function OnCommand(message)
 		if hide_reticle_hud == true then
 			ReticeHud(true)
 		end
-		RemoveReticleGun()
 		local player = get_dynamic_player()
 		if player ~= nil then
 			local camera_mode = read_short(camera_address)
@@ -1441,6 +1341,7 @@ function OnCommand(message)
 			write_word(camera_address, CAMERA.first_person)
 		end
 		
+		DeleteProjectiles()
 		ChangeSoundVolumes(1)
 		AdjustReticlePosition(0,0)
 		SetBigassReticle(9999,9999, 0)
@@ -1460,7 +1361,7 @@ function OnUnload()
 			delete_object(check_gun)
 		end
 	end
-	RemoveReticleGun()
+	DeleteProjectiles()
 	ToggleScopeMasks(true)
 	ChangeSoundVolumes(1)
 	AdjustReticlePosition(0,0)
@@ -1571,15 +1472,21 @@ function ChangeCameraTrack()
 		ToggleScopeMasks(false)
 	end
 	
-	if find_camera_track and map_is_protected == false then
-		if CheckProtection() then
-			map_is_protected = true
-			if debug_messages then
-				console_out("map is protected")
+	if changed == false then
+		if find_camera_track and map_is_protected == false then
+			if CheckProtection() then
+				map_is_protected = true
+				if debug_messages then
+					console_out("map is protected")
+				end
+			else
+				map_is_protected = false
 			end
-		else
-			map_is_protected = false
 		end
+		
+		PrepareNeedlerTags()
+		
+		changed = true
 	end
 	
 	if false and map_is_protected then -- disabled for now
@@ -1658,35 +1565,6 @@ function ChangeCameraTrack()
 	return false
 end
 
-function GetDistance(object, object2, camera_height)
-	local x = read_float(object + 0x5C)
-	local y = read_float(object + 0x60)
-	local z = read_float(object + 0x64)
-	local x1 = read_float(object2 + 0x5C)
-	local y1 = read_float(object2 + 0x60)
-	local z1 = read_float(object2 + 0x64) + camera_height
-	local vehicle_id = read_u32(object + 0x11C)
-	if vehicle_id ~= 0xFFFFFFFF then
-		local vehicle = get_object(vehicle_id)
-		if vehicle ~= nil then
-			-- this part isn't correct but not sure how to improve it...
-			--x = read_float(object + 0xA8)
-			--y = read_float(object + 0xA4)
-			--z = read_float(object + 0xA8)
-			--x = read_float(object + 0x5C)
-			--y = read_float(object + 0x60)
-			--z = read_float(object + 0x64)
-			x = read_float(vehicle + 0x5C)
-			y = read_float(vehicle + 0x60)
-			z = read_float(vehicle + 0x64)
-		end
-	end
-	local x_dist = x1 - x
-	local y_dist = y1 - y
-	local z_dist = z1 - z
-	return sqrt(x_dist*x_dist + y_dist*y_dist + z_dist*z_dist)
-end
-
 function FindEquip()
 	local tag_array = read_dword(0x40440000)
     local tag_count = read_dword(0x4044000C)
@@ -1700,11 +1578,13 @@ function FindEquip()
 end
 
 function CheckProtection()
-	if get_tag("proj", "altis\\effects\\distance_check") ~= nil then
+	if get_tag("proj", "altis\\effects\\distance_check") ~= nil and second_reticle_bigass then
 		bigassv3 = true
 	else
 		bigassv3 = false
 	end
+	
+	PrepareNeedlerTags()
 	
 	local tag_array = read_dword(0x40440000)
     local tag_count = read_dword(0x4044000C)
@@ -1735,3 +1615,160 @@ function ScriptLoaded() -- check if camera is already in third person when scrip
 end
 
 ScriptLoaded()
+
+function CalculateFov(fov)
+	local screen_h = read_word(0x637CF0)
+	local screen_w = read_word(0x637CF2)
+	aspect_ratio = screen_w/screen_h
+	fov = fov*180/pi
+	vertical_fov = atan(tan(fov*pi/360) * (1/aspect_ratio)) * 360/pi
+	vertical_fov = vertical_fov * 0.9
+end
+
+function FindSunInScreenSpace(x, y, z, eye_x, eye_y, eye_z, look_x, look_y, look_z, fovy)
+	local view_xy = 0
+	local view_w = 1 --1.12
+	local view_h = 1 --1.12
+		
+	local eye = {}
+	eye.x = eye_x
+	eye.y = eye_y
+	eye.z = eye_z
+	local lookat = {}
+	lookat.x = look_x
+	lookat.y = look_y
+	lookat.z = look_z
+	local view  = new()
+	local up = {}
+	up.x, up.y, up.z = 0, 0, 1
+	local aspect = aspect_ratio
+	local near = 0.000001
+	local far = 1000000
+	view = look_at(view, eye, lookat, up)
+	projection = from_perspective(fovy, aspect, near, far)
+	viewport = {view_xy, view_xy, view_w, view_h}
+	return project(x, y, z, view, projection, viewport)
+end
+
+function project(x, y, z, view, projection, viewport)
+	local position = { x, y, z, 1 }
+	
+	mul_vec4(position, view,       position)
+	mul_vec4(position, projection, position)
+	
+	if position[4] ~= 0 then
+		position[1] = position[1] / position[4] * 0.5 + 0.5
+		position[2] = position[2] / position[4] * 0.5 + 0.5
+		position[3] = position[3] / position[4] * 0.5 + 0.5
+	end
+	
+	position[1] = position[1] * viewport[3] + viewport[1]
+	position[2] = position[2] * viewport[4] + viewport[2]
+	return position[1], position[2], position[3]
+end
+
+function mul_vec4(out, a, b)
+	local tv4 = { 0, 0, 0, 0 }
+	tv4[1] = b[1] * a[1] + b[2] * a[5] + b [3] * a[9]  + b[4] * a[13]
+	tv4[2] = b[1] * a[2] + b[2] * a[6] + b [3] * a[10] + b[4] * a[14]
+	tv4[3] = b[1] * a[3] + b[2] * a[7] + b [3] * a[11] + b[4] * a[15]
+	tv4[4] = b[1] * a[4] + b[2] * a[8] + b [3] * a[12] + b[4] * a[16]
+
+	for i=1, 4 do
+		out[i] = tv4[i]
+	end
+	
+	return out
+end
+
+function look_at(out, eye, lookat, up)
+	eye.x = eye.x - lookat.x
+	eye.y = eye.y - lookat.y
+	eye.z = eye.z - lookat.z
+	local z_axis = normalize(eye)
+	local x_axis = normalize(cross(up, z_axis))
+	local y_axis = cross(z_axis, x_axis)
+	out[1] = x_axis.x
+	out[2] = y_axis.x
+	out[3] = z_axis.x
+	out[4] = 0
+	out[5] = x_axis.y
+	out[6] = y_axis.y
+	out[7] = z_axis.y
+	out[8] = 0
+	out[9] = x_axis.z
+	out[10] = y_axis.z
+	out[11] = z_axis.z
+	out[12] = 0
+	out[13] = 0
+	out[14] = 0
+	out[15] = 0
+	out[16] = 1
+
+  return out
+end
+
+function normalize(a)
+	if is_zero(a) then
+		return new_v3()
+	end
+	return scale(a, (1 / len(a)))
+end
+
+function len(a)
+	return sqrt(a.x * a.x + a.y * a.y + a.z * a.z)
+end
+
+function scale(a, b)
+	return new_v3(
+		a.x * b,
+		a.y * b,
+		a.z * b
+	)
+end
+
+function is_zero(a)
+	return a.x == 0 and a.y == 0 and a.z == 0
+end
+
+function cross(a, b)
+	return new_v3(
+		a.y * b.z - a.z * b.y,
+		a.z * b.x - a.x * b.z,
+		a.x * b.y - a.y * b.x
+	)
+end
+
+function from_perspective(fovy, aspect, near, far)
+	assert(aspect ~= 0)
+	assert(near   ~= far)
+
+	local t   = tan(rad(fovy) / 2)
+	local out = new()
+	out[1]    =  1 / (t * aspect)
+	out[6]    =  1 / t
+	out[11]   = -(far + near) / (far - near)
+	out[12]   = -1
+	out[15]   = -(2 * far * near) / (far - near)
+	out[16]   =  0
+	
+	return out
+end
+
+function new_v3(x, y, z)
+	return {
+		x = x or 0,
+		y = y or 0,
+		z = z or 0
+	}
+end
+
+function new(m)
+	m = m or {
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0
+	}
+	return m
+end

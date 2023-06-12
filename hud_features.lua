@@ -1,11 +1,11 @@
---HUD Features script by aLTis. Version 1.0.1
+--HUD Features script by aLTis. Version 1.1.1
 
 --CONFIG
 	dead_ally_markers_enable = true -- shows a red arrow above dead ally bodies (doesn't work on Chimera 1.0)
 	
 	secondary_weapon_enable = true -- shows what weapons you have in your inventory
-		show_in_vehicles = true
-		position_x = -293
+		show_in_vehicles = false
+		position_x = -290
 		position_y = -216
 		position_x_bigass = 409
 		position_y_bigass = -141
@@ -14,13 +14,20 @@
 		team_color_red = {["red"] = 255, ["green"] = 30, ["blue"] = 40}
 		team_color_blue = {["red"] = 60, ["green"] = 50, ["blue"] = 255}
 		
+	sniper_scope_fix = true -- fixes broken ticks on the Sniper Rifle scope
+	
+	hitmarkers_enable = true
+		hitmarker_position = 16 -- how far the hitmarker is from the center
+		hitmarker_animation_position = 2 -- how far the hitmarker moves when animating
+		hitmarker_length = 3 -- in ticks
+		hitmarker_color = {["red"] = 40, ["green"] = 150, ["blue"] = 255}
+	
 --END OF CONFIG
 
-clua_version = 2.042
+--Known issues:
+-- dead ally markers sometimes stay on the hud
 
-local dead_ally_markers = dead_ally_markers_enable
-local secondary_weapon = secondary_weapon_enable
-local score_meters = score_meters_enable
+clua_version = 2.042
 
 local bitmap_test = "rasterizer\\distance attenuation"
 local bitmap_numbers = "ui\\hud\\bitmaps\\combined\\hud_counter_numbers"
@@ -44,23 +51,28 @@ local bitmap_white = "ui\\shell\\bitmaps\\white"
 local bitmap_arrow_right = "ui\\shell\\bitmaps\\arrow_sm_right"
 
 local memory_address = 0x40440000
-local struct1_count = 26
+local struct1_count = 36
 local new_struct1_size = 180*struct1_count + 4
 local new_struct1 = memory_address - new_struct1_size
 local new_struct2_size = 180*2 + 4
 local new_struct2 = new_struct1 - new_struct2_size - 4
+local new_struct3_size = 64*11 + 4
+local new_struct3 = new_struct2 - new_struct3_size - 4
 
 local red = 1
 local green = 0
 local blue = 0
 local alpha = 0.5
 
+local dead_ally_markers = dead_ally_markers_enable
+local secondary_weapon = secondary_weapon_enable
+local score_meters = score_meters_enable
+local hitmarkers = hitmarkers_enable
+
 local chimera_fix = 0
 if build > 0 then
 	dead_ally_markers_enable = false
 	dead_ally_markers = false
-	position_x = position_x + 100
-	position_x_bigass = position_x_bigass - 100
 	chimera_fix = -100
 end
 
@@ -73,8 +85,12 @@ local loaded = false
 local bigass = false
 local POSITIONS = {}
 local WEAPON_HUDS = {}
+local HITMARKER_SOUNDS = {}
+local last_hitmarker_time = 0
 local hrx = false
 local h2_hud = false
+local sniper_needs_fixing = false
+local numbers_found = false
 local hud_address = 0x400007F4
 local gametype_base = 0x68CC48
 local ctf_globals = 0x64BDB8
@@ -83,6 +99,10 @@ local oddball_globals = 0x64C078
 local koth_globals = 0x64BDF0
 local race_globals = 0x64C1C0
 local stats_globals = 0x64BAB8
+local sounds_global = read_dword(0x6C0580)
+local sound_struct_address = read_dword(sounds_global + 52)
+local game_state_address = 0x400002E8
+local object_table = read_dword(read_dword(0x401194))
 local sqrt = math.sqrt
 local abs = math.abs
 local floor = math.floor
@@ -94,6 +114,18 @@ local tan = math.tan
 local sin = math.sin
 local cos = math.cos
 local rad = math.rad
+
+function AspectRatio()
+	local screen_h = read_word(0x637CF0)
+	local screen_w = read_word(0x637CF2)
+	aspect_ratio = screen_w/screen_h
+	if aspect_ratio < 1.4 then
+		chimera_fix = 0
+	end
+	--console_out(aspect_ratio)
+end
+
+AspectRatio()
 
 local PLAYER_COLORS = {
 	[0] = {["r"] = 255, ["g"] = 255, ["b"] = 255}, --white
@@ -173,6 +205,11 @@ function FixInVehicles()
 	end
 end
 
+function RemoveMarker(i)
+	SetHudPosition(i,999,999)
+	POSITIONS[i] = nil
+end
+
 function OnTick()
 	if loaded == false then return end
 	m_player = get_player()
@@ -180,6 +217,22 @@ function OnTick()
 		--console_out("umm what")
 		return
 	end
+	
+	if sniper_scope_fix and sniper_needs_fixing then
+		local player = get_dynamic_player()
+		if player then
+			local weap_slot = read_byte(player + 0x2F2)
+			local weapon = get_object(read_dword(player + 0x2F8+4*weap_slot))			
+			if weapon then
+				local name = GetName(weapon)
+				if name == "weapons\\sniper rifle\\sniper rifle" then
+					set_timer(500, "FixSniperScope")
+					sniper_needs_fixing = false
+				end
+			end
+		end
+	end
+	
 	local player_team = read_byte(m_player + 0x20)
 	
 	FixInVehicles()
@@ -196,15 +249,13 @@ function OnTick()
 							POSITIONS[i] = obj_id
 						end
 					elseif POSITIONS[i] ~= nil then
-						POSITIONS[i] = nil
+						RemoveMarker(i)
 					end
 				else
-					SetHudPosition(i,999,999)
-					POSITIONS[i] = nil
+					RemoveMarker(i)
 				end
 			else
-				SetHudPosition(i,999,999)
-				POSITIONS[i] = nil
+				RemoveMarker(i)
 			end
 		end
 	end
@@ -268,6 +319,38 @@ function OnTick()
 			SetMeters(your_score, opponent_score, score_limit, -1, opponent_id)
 		end
 	end
+	
+	if hitmarkers and server_type == "none" then
+		SPHitmarkers()
+	end
+end
+
+function SPHitmarkers()
+	local game_time = read_word(game_state_address + 12)
+	
+	local object_count = read_word(object_table + 0x2E)
+	local first_object = read_dword(object_table + 0x34)
+	for i=0,object_count-1 do
+		local ID = read_word(first_object + i*12)*0x10000 + i
+		local object = read_dword(first_object + i * 0xC + 0x8)
+		if object ~= 0 then
+			local object_type = read_word(object + 0xB4)
+			if object_type == 0 or object_type == 1 then
+				for j=0,3 do -- recent damagers
+					local damager_playerid = read_dword(object + 0x43C + 0x10*j)
+					if damager_playerid ~= 0xFFFFFFFF then
+						local damage_time = read_dword(object + 0x430 + 0x10*j)
+						local death_time = read_dword(object + 0x41C)
+						if (game_time - damage_time) == 0 and (death_time == 0xFFFFFFFF or (game_time - death_time) < 1) then
+							last_hitmarker_time = ticks()
+							SetHitmarker(true)
+							return
+						end
+					end
+				end
+			end
+		end
+	end
 end
 
 function GetPlayerScore(i)
@@ -291,14 +374,20 @@ function GetPlayerScore(i)
 end
 
 function OnMapLoad()
+	AspectRatio()
 	ResetMemory()
-	dead_ally_markers = dead_ally_markers_enable
-	secondary_weapon = secondary_weapon_enable
-	score_meters = score_meters_enable
+	dead_ally_markers = false
+	secondary_weapon = false
+	score_meters = false
+	hitmarkers = false
+	last_hitmarker_time = 0
 	loaded = false
+	numbers_found = false
+	
+	--do it multiple times because it refuses to work sometimes :/
 	set_timer(700, "SetupTags")
 	set_timer(2100, "SetupTags")
-	--SetupTags()
+	set_timer(4000, "SetupTags")
 	POSITIONS = {}
 	WEAPON_HUDS = {}
 end
@@ -313,6 +402,7 @@ end
 function ResetMemory()
 	ResetMemoryField(new_struct1, new_struct1_size)
 	ResetMemoryField(new_struct2, new_struct2_size)
+	ResetMemoryField(new_struct3, new_struct3_size)
 end
 
 function WriteColor(address, blue, green, red, alpha)
@@ -327,7 +417,7 @@ end
 function CheckAllocation(address, size)
 	for i=0,size-4 do
 		if read_byte(address + i) ~= 0 then
-			console_out("HUD_FEATURES.LUA Error at "..i.." because its "..read_byte(address + i))
+			console_out("HUD_FEATURES.LUA Error at 0x"..string.format("%X", address+i).." because its "..read_byte(address + i))
 			return false
 		end
 	end
@@ -345,7 +435,13 @@ function AllocateMemory()
 		console_out("HUD_FEATURES.LUA Failed to allocate memory for struct2")
 		return false
 	end
+	if CheckAllocation(new_struct3, new_struct3_size) == false then
+		loaded = false
+		console_out("HUD_FEATURES.LUA Failed to allocate memory for struct3")
+		return false
+	end
 end
+
 function ResetMemoryField(address, size)
 	if loaded then
 		for i=0,size-4 do
@@ -373,14 +469,15 @@ function ResetTags()
 		if gauss_meter_address then
 			write_dword(gauss_meter_address, 1)
 		end
+		if score_meters and numbers_found then
+			SetupNumbers(true)
+		end
 	end
 end
 
 function GetAspectRatio(offset_from_corner)
 	local hac_widescreen = 1
-	local screen_h = read_word(0x637CF0)
-	local screen_w = read_word(0x637CF2)
-	local aspect_ratio_fix = floor((320 + offset_from_corner) - (320 + offset_from_corner)*(screen_w/screen_h)/(16/9) +1)
+	local aspect_ratio_fix = floor((320 + offset_from_corner) - (320 + offset_from_corner)*aspect_ratio/(16/9) +1)
 	if bigass then
 		local dmr_tag = get_tag("wphi", "bourrin\\hud\\v3\\interfaces\\dmr")
 		if dmr_tag then
@@ -401,8 +498,25 @@ function GetAspectRatio(offset_from_corner)
 	return aspect_ratio_fix, hac_widescreen
 end
 
-function GetHudMsgIDs()
+function FindSniper()
+	sniper_needs_fixing = false
+	local tag_count = read_dword(0x4044000C)
+	
+    for i = 0,tag_count - 1 do
+        local tag = get_tag(i)
+		local tag_class = read_dword(tag)
+		if tag_class == 0x77706869 then
+			local tag_name = read_string(read_dword(tag + 0x10))
+			if tag_name == "weapons\\sniper rifle\\sniper rifle" then
+				sniper_needs_fixing = true
+			end
+		end
+	end
+end
+
+function GetTagStuff()
 	local master_hud = read_dword(master_hud_tag + 0xC)
+	ting = nil
 	
 	WEAPON_HUDS = {}
 	local tag_count = read_dword(0x4044000C)
@@ -410,10 +524,10 @@ function GetHudMsgIDs()
     for i = 0,tag_count - 1 do
         local tag = get_tag(i)
 		local tag_class = read_dword(tag)
+		local tag_data = read_dword(tag + 0x14)
 		
 		--weap
-		if tag_class == 0x77656170 then
-			local tag_data = read_dword(tag + 0x14)
+		if tag_class == 0x77656170 and bitmap_icons_tag then
 			local hud_tag = get_tag(read_dword(tag_data + 0x480 + 0xC))
 			if hud_tag then
 				if secondary_weapon then
@@ -421,11 +535,13 @@ function GetHudMsgIDs()
 					local msg_id = read_short(hud_tag + 0x13C)
 					if msg_id > -1 and msg_id < 100 then
 						local metaid = read_dword(tag + 0xC)
-						local width = GetBitmapWidth(msg_id)
-						if width ~= 1 then
+						local width = GetBitmapWidth(msg_id, bitmap_icons_tag)
+						local tag_name = read_string(read_dword(tag + 0x10))
+						if width > 0 then
 							WEAPON_HUDS[metaid] = {}
 							WEAPON_HUDS[metaid].id = msg_id
 							WEAPON_HUDS[metaid].width = width
+							WEAPON_HUDS[metaid].name = tag_name
 						end
 					end
 				end
@@ -437,7 +553,6 @@ function GetHudMsgIDs()
 			
 		--wphi
 		elseif tag_class == 0x77706869 then
-			local tag_data = read_dword(tag + 0x14)
 			if read_dword(tag_data + 0xC) == 0xFFFFFFFF then
 				local metaid = read_dword(tag + 0xC)
 				if metaid ~= master_hud then
@@ -448,18 +563,128 @@ function GetHudMsgIDs()
 		end
     end
 	
+	for i = 0,tag_count - 1 do
+        local tag = get_tag(i)
+		local tag_class = read_dword(tag)
+		local tag_data = read_dword(tag + 0x14)
+		
+		--matg
+		if tag_class == 0x6D617467 then
+			local multiplayer_info_count = read_dword(tag_data + 0x164)
+			if multiplayer_info_count > 0 then
+				local multiplayer_info_address = read_dword(tag_data + 0x164 + 4)
+				
+				--get waypoint bitmaps of the flag and skull for secondaries
+				if bitmap_waypoints_tag then
+					local ball_id = read_dword(multiplayer_info_address + 0x4C + 0xC)
+					if ball_id then
+						WEAPON_HUDS[ball_id] = {}
+						WEAPON_HUDS[ball_id].id = 4
+						WEAPON_HUDS[ball_id].width = GetBitmapWidth(2, bitmap_waypoints_tag)
+						WEAPON_HUDS[ball_id].waypoint = true
+					end
+					local flag_id = read_dword(multiplayer_info_address + 0xC)
+					if flag_id then
+						WEAPON_HUDS[flag_id] = {}
+						WEAPON_HUDS[flag_id].id = 2
+						WEAPON_HUDS[flag_id].width = GetBitmapWidth(2, bitmap_waypoints_tag)
+						WEAPON_HUDS[flag_id].waypoint = true
+					end
+				end
+				
+				local sounds_count = read_dword(multiplayer_info_address + 0x5C)
+				if sounds_count > 43 then
+					local sounds_address = read_dword(multiplayer_info_address + 0x5C+4) + 43*16
+					ting = read_dword(sounds_address + 0xC)
+				end
+			end
+		end
+	end
 	return false
 end
 
-function GetBitmapWidth(id)
-	local bitmap_tag = read_dword(bitmap_icons_tag + 0x14)
+function FixSniperScope()
+	local tag = get_tag("wphi", "weapons\\sniper rifle\\sniper rifle")
+	if tag then
+		local tag_data = read_dword(tag + 0x14)
+		if read_dword(tag_data + 0x60) == 3 then
+			local address = read_dword(tag_data + 0x64) + 180
+			local address2 = address + 180
+			local multitex_count = read_dword(address + 0x7C)
+			local multitex_count2 = read_dword(address2 + 0x7C)
+			if multitex_count == 1 and multitex_count2 == 1 then
+				local x1 = read_short(address  + 0x24)-- -14
+				local x2 = read_short(address2 + 0x24)-- -445
+				write_short(address + 0x24, 131)
+				write_short(address + 0x26, 112)
+				
+				write_short(address2 + 0x24, 485)
+				write_short(address2 + 0x26, 112)
+				
+				local multitex_address = read_dword(address + 0x7C+4)
+				local multitex_address2 = read_dword(address2 + 0x7C+4)
+				
+				--Blend function
+				write_byte(multitex_address + 0x4, 0)
+				write_byte(multitex_address2 + 0x4, 0)
+				
+				--0 to 1 blend function
+				write_byte(multitex_address + 0x2E, 3)
+				write_byte(multitex_address2 + 0x2E, 3)
+				
+				--add ticks_black bitmap to fix weird color changing bug
+				local ticks_bitmap = get_tag("bitm", "weapons\\sniper rifle\\bitmaps\\angle_ticks_black")
+				if ticks_bitmap then
+					local tag_class = read_dword(ticks_bitmap)
+					local metaid = read_dword(ticks_bitmap + 0xC)
+					write_dword(multitex_address + 0x84, tag_class)
+					write_dword(multitex_address + 0x84 + 0xC, metaid)
+					write_dword(multitex_address2 + 0x84, tag_class)
+					write_dword(multitex_address2 + 0x84 + 0xC, metaid)
+				end
+			end
+		end
+	end
+	return false
+end
+
+function SetupNumbers(reset)
+	if reset and numbers_found then 
+		local tag_data = read_dword(bitmap_numbers_tag + 0x14)
+		write_dword(tag_data + 0x54, 1) -- could break things if tags are different but whatever for now
+	else
+		local tag_data = read_dword(bitmap_numbers_tag + 0x14)
+		if read_dword(tag_data + 0x54) == 1 then
+			write_dword(tag_data + 0x54, 11)
+			write_dword(tag_data + 0x58, new_struct3)
+			for i=0,10 do
+				local struct = new_struct3 + i*64
+				if i == 0 then
+					write_word(struct + 0x20, 0) --first bitmap index
+					write_word(struct + 0x22, 10) --bitmap count
+				else
+					write_word(struct + 0x20, i-1) --first bitmap index
+					write_word(struct + 0x22, 10) --bitmap count
+				end
+			end
+		else
+			return false
+			--console_out("HUD_FEATURES.LUA ERROR SETTING UP NUMBERS")
+		end
+	end
+	return true
+end
+
+function GetBitmapWidth(id, bitmap)
+	local bitmap_tag = read_dword(bitmap + 0x14)
 	local count = read_dword(bitmap_tag + 0x54)
 	if id > count then
-		console_out("HUD_FEATURES.LUA error getting width")
+		--console_out("HUD_FEATURES.LUA error getting width for ID: "..id.." (count is "..count..")")
 		return -1
 	end
 	local address = read_dword(bitmap_tag + 0x58)
 	local struct = address + id*64
+	
 	local count2 = read_dword(struct + 0x34)
 	local address2 = read_dword(struct + 0x38)
 	for j=0,count2-1 do
@@ -469,21 +694,34 @@ function GetBitmapWidth(id)
 		local width = right-left
 		return width
 	end
+	
+	--if it's not a sprite
+	local count3 = read_dword(bitmap_tag + 0x60)
+	if count3 > 0 then
+		return 1
+	end
+	
+	return -1 --idk
 end
 
 function GetTags()
 	bitmap_test_tag = get_tag("bitm", bitmap_test)
 	bitmap_damage_tag = get_tag("bitm", bitmap_damage)
 	bitmap_icons_tag = get_tag("bitm", bitmap_icons)
+	bitmap_waypoints_tag = get_tag("bitm", bitmap_waypoints)
 	bitmap_meters_tag = get_tag("bitm", bitmap_unit_meters)
 	bitmap_ammo_outlines_tag = get_tag("bitm", bitmap_ammo_outlines)
 	bitmap_weapon_background = get_tag("bitm", bitmap_weapon_backgrounds)
 	bitmap_arrow_tag = get_tag("bitm", bitmap_arrow_right)
+	bitmap_numbers_tag = get_tag("bitm", "weapons\\assault rifle\\fp\\bitmaps\\numbers_plate")
 	master_hud_tag = get_tag("wphi", "ui\\hud\\master")
+	bitmap_hitmarker_tag = get_tag("bitm", "effects\\particles\\solid\\bitmaps\\needler spike debris")
 	
 	bigass = false
 	hrx = false
 	h2_hud = false
+	anniversary_hud = false
+	soi = false
 	if bitmap_damage_tag == nil then
 		bitmap_damage_tag = get_tag("bitm", "ui\\hud\\hrx_bitmaps\\hrx_damage_arrows\\hrx_damage_arrows")
 		if bitmap_damage_tag then
@@ -497,8 +735,17 @@ function GetTags()
 	if bitmap_icons_tag == nil then
 		bitmap_icons_tag = get_tag("bitm", "ui\\hud\\bitmaps\\combined\\cmt_hud_msg_icons")
 		if bitmap_icons_tag == nil then
-			bigass = true
-			bitmap_icons_tag = get_tag("bitm", "bourrin\\hud\\v3\\bitmaps\\bourrin hud msg icons")
+			bitmap_icons_tag = get_tag("bitm", "soi\\hud\\bitmaps\\icons\\weapon_icons")
+			if bitmap_icons_tag == nil then
+				bigass = true
+				bitmap_icons_tag = get_tag("bitm", "bourrin\\hud\\v3\\bitmaps\\bourrin hud msg icons")
+				if bitmap_numbers_tag == nil then
+					bitmap_numbers_tag = get_tag("bitm", "bourrin\\weapons\\masternoob's assault rifle\\bitmaps\\iris")
+				end
+				--if bitmap_icons_tag == nil then
+				--	bitmap_icons_tag = get_tag("bitm", "hud\\killa_icons")
+				--end
+			end
 		end
 	end
 	if bitmap_ammo_outlines_tag == nil then
@@ -512,13 +759,30 @@ function GetTags()
 		if bitmap_meters_tag and bitmap_ammo_outlines_tag and bitmap_weapon_background then
 			hrhh = true
 		end
+	else
+		local width = GetBitmapWidth(0, bitmap_meters_tag)
+		if width == 0.4765625 then
+			anniversary_hud = true
+		end
+	end
+	if bitmap_hitmarker_tag == nil then
+		bitmap_hitmarker_tag = get_tag("bitm", "effects\\particles\\solid\\bitmaps\\wood chips")
+		if bitmap_hitmarker_tag then
+			soi = true
+			hitmarker_length = hitmarker_length + 1 -- just to make it slightly more visible :v
+		end
 	end
 	if master_hud_tag == nil then
-		master_hud_tag = get_tag("wphi", "taunts\\wheel_selection")
+		master_hud_tag = get_tag("wphi", "taunts\\empty")
 		if master_hud_tag == nil then
 			master_hud_tag = get_tag("wphi", "ui\\hud\\h2 master")
 			if master_hud_tag ~= nil then
 				h2_hud = true
+			else
+				master_hud_tag = get_tag("wphi", "soi\\hud\\interfaces\\weapons\\master\\visor data_right")
+				if master_hud_tag == nil then
+					master_hud_tag = get_tag("wphi", "soi\\hud\\interfaces\\weapons\\master\\visor data")
+				end
 			end
 		end
 	end
@@ -527,8 +791,9 @@ end
 function SetupTags()
 	if map == "ui" then return end
 	
+	FindSniper()
+	
 	if loaded == false then -- check if tags exist
-		AllocateMemory()
 		GetTags()
 		
 		if master_hud_tag == nil then
@@ -548,7 +813,7 @@ function SetupTags()
 		end
 		
 		if secondary_weapon_enable then
-			if bitmap_icons_tag then
+			if bitmap_icons_tag then--and bitmap_waypoints_tag then
 				--console_out("secondaries enabled :D")
 				secondary_weapon = true
 			else
@@ -559,6 +824,9 @@ function SetupTags()
 		
 		if score_meters_enable then
 			if bitmap_meters_tag and bitmap_ammo_outlines_tag and bitmap_weapon_background and bitmap_arrow_tag then
+				if bitmap_numbers_tag then
+					numbers_found = SetupNumbers(false)
+				end
 				--console_out("score meters enabled :D")
 				score_meters = true
 			else
@@ -571,25 +839,35 @@ function SetupTags()
 			end
 		end
 		
-		if dead_ally_markers == false and secondary_weapon == false and score_meters == false then
+		if hitmarkers_enable and bitmap_hitmarker_tag then
+			hitmarkers = true
+		else
+			--console_out("bitmap not found for hitmarkers")
+			hitmarkers = false
+		end
+		
+		if dead_ally_markers == false and secondary_weapon == false and score_meters == false and hitmarkers then
 			--console_out("not loaded :(")
 			loaded = false
 		else
 			--console_out("loaded :)")
 			loaded = true
 		end
+		
+		--AllocateMemory()
 	end
 	
-	if bitmap_test_tag == nil then return false end -- just make sure the bitmap exists otherwise it will crash
+	if loaded == false or bitmap_test_tag == nil then return false end -- just make sure the bitmap exists otherwise it will crash
 	
 	if server_type == "none" then
 		dead_ally_markers = false
 		score_meters = false
 	end
 	
+
+	
 	local master_hud_tag_data = read_dword(master_hud_tag + 0x14)
-	GetHudMsgIDs()
-	--set_timer(700, "GetHudMsgIDs")
+	GetTagStuff()
 	
 	--position
 	write_short(master_hud_tag_data + 0x3C, 4)
@@ -682,6 +960,11 @@ function SetupTags()
 				write_float(address + 0x28, 0.163*hac_widescreen)--scale x
 				write_float(address + 0x2C, 1.69)--scale y
 				write_short(address + 0x78, 9) --sequence index
+			elseif anniversary_hud then
+				write_float(address + 0x28, 0.665*0.485*hac_widescreen)--scale x
+				write_float(address + 0x2C, 4.2*0.555)--scale y
+				--write_short(address + 0x24, floor((376 - (i-1)*2 -1 +chimera_fix -aspect_ratio_fix)*hac_widescreen))--x
+				write_short(address + 0x26, 178 + i*20 +2)--y
 			end
 		end
 		
@@ -706,6 +989,9 @@ function SetupTags()
 				write_float(address + 0x28, (0.4/5.5)*hac_widescreen)--scale x
 				write_float(address + 0x2C, 1.05/4)--scale y
 				write_short(address + 0x78, 1) --sequence index
+			elseif anniversary_hud then
+				write_float(address + 0x28, (0.4/4)*hac_widescreen)--scale x
+				write_float(address + 0x2C, 1.05/4)--scale y
 			end
 		end
 		
@@ -751,13 +1037,75 @@ function SetupTags()
 				write_float(address + 0x28, (-0.332/4)*hac_widescreen)--scale x
 				write_float(address + 0x2C, 1.4/4)--scale y
 				write_short(address + 0x6A, 7) --sequence index
+			elseif anniversary_hud then
+				write_float(address + 0x28, (-0.332/2)*hac_widescreen)--scale x
+				write_float(address + 0x2C, 1.4/2)--scale y
+			end
+		end
+		
+		--numbers
+		if numbers_found then
+			if bigass then
+				numbers_scale = 0.08
+			else
+				numbers_scale = 0.29
+			end
+			for i=0,5 do
+				local address = new_struct1 + (26+i)*180
+				local x = (i%3)*7
+				local y = 0
+				if i>2 then
+					y = 20
+					x = x-2
+				end
+				write_word(address + 0x00, 6)--state
+				write_short(address + 0x24, floor((340 + x +chimera_fix -aspect_ratio_fix)*hac_widescreen))--x
+				write_short(address + 0x26, 190 + y)--y
+				write_float(address + 0x28, numbers_scale*0.8*hac_widescreen)--scale x
+				write_float(address + 0x2C, 0)--scale y
+				write_dword(address + 0x48, read_dword(bitmap_numbers_tag))--bitmap
+				write_dword(address + 0x48 + 0xC, read_dword(bitmap_numbers_tag + 0xC))
+				if bigass then
+					WriteColor(address + 0x58, 255, 180, 130, 0)
+				else
+					WriteColor(address + 0x58, 255, 240, 240, 0)
+				end
+			end
+		else
+			for i=0,5 do
+				local address = new_struct1 + (26+i)*180
+				write_dword(address + 0x48, read_dword(bitmap_test_tag))--bitmap
+				write_dword(address + 0x48 + 0xC, read_dword(bitmap_test_tag + 0xC))
 			end
 		end
 	else
-		for i=0,6 do
+		for i=0,16 do
 			local address = new_struct1 + (19+i)*180
 			write_dword(address + 0x48, read_dword(bitmap_test_tag))--bitmap
 			write_dword(address + 0x48 + 0xC, read_dword(bitmap_test_tag + 0xC))
+		end
+	end
+	
+	--hitmarkers
+	for i=0,3 do
+		local address = new_struct1 + (32+i)*180
+		write_word(address + 0x00, 6)--state
+		write_short(address + 0x24, 999)--x
+		write_short(address + 0x26, 999)--y
+		write_float(address + 0x28, 0)--scale x
+		write_float(address + 0x2C, 0)--scale y
+		if hitmarkers then
+			write_dword(address + 0x48, read_dword(bitmap_hitmarker_tag))--bitmap
+			write_dword(address + 0x48 + 0xC, read_dword(bitmap_hitmarker_tag + 0xC))
+		else
+			write_dword(address + 0x48, read_dword(bitmap_test_tag))--bitmap
+			write_dword(address + 0x48 + 0xC, read_dword(bitmap_test_tag + 0xC))
+		end
+		write_short(address + 0x78, 0) --sequence index
+		WriteColor(address + 0x58, hitmarker_color.blue, hitmarker_color.green, hitmarker_color.red, 0) --default color
+		
+		if soi then
+			write_short(address + 0x78, 1) --sequence index
 		end
 	end
 	
@@ -791,9 +1139,53 @@ function SetMeterColor(i ,blue, green, red, player_team)
 	WriteColor(address + 0x64, floor(blue/6.3), floor(green/6.3), floor(red/6.3)) --empty color
 end
 
+function SetNumber(i, number)
+	if numbers_found == false or numbers_scale == nil then return end
+	
+	if number > 999 then
+		number = 999
+	elseif number < -999 then
+		for j=0,2 do
+			local address = new_struct1 + (26+j+i*3)*180
+			write_float(address + 0x2C, 0)
+		end
+		return false
+	end
+	
+	local NUMS = {
+		[0] = floor(number/100),
+		[1] = floor((number%100)/10),
+		[2] = floor(number%10),
+	}
+	
+	if NUMS[0] == 0 then
+		NUMS[0] = NUMS[1]
+		NUMS[1] = NUMS[2]
+		NUMS[2] = nil
+	end
+	if NUMS[0] == 0 then
+		NUMS[0] = NUMS[1]
+		NUMS[1] = nil
+	end
+	
+	for j=0,2 do
+		local address = new_struct1 + (26+j+i*3)*180
+		if NUMS[j] ~= nil then
+			write_float(address + 0x2C, numbers_scale)
+			write_short(address + 0x78, NUMS[j]+1)
+		else
+			write_float(address + 0x2C, 0)
+		end
+	end
+end
+
 function SetMeters(red_score, blue_score, max_score, player_team, opponent_id)
-	--red_score = 2
+	--red_score = 690
 	--blue_score = 1
+	
+	SetNumber(0, red_score)
+	SetNumber(1, blue_score)
+	
 	local address_red = new_struct2
 	local address_blue = new_struct2 + 180
 	local red_bar = floor(red_score/max_score*254)
@@ -821,9 +1213,20 @@ function SetMeters(red_score, blue_score, max_score, player_team, opponent_id)
 	end
 end
 
-function SetSecondaryWeapon(id, width, i)
+function SetSecondaryWeapon(id, width, i, waypoint)
 	local address = new_struct1 + (16+i)*180
+	
+	if build > 0 and i > 1 then
+		id = -1
+	end
+	
 	if id > -1 then
+		--console_out("id: "..id.." width "..width.." i: "..i)
+		if waypoint then
+			write_dword(address + 0x48 + 0xC, read_dword(bitmap_waypoints_tag + 0xC))
+		else
+			write_dword(address + 0x48 + 0xC, read_dword(bitmap_icons_tag + 0xC))
+		end
 		--console_out(id)
 		local aspect_ratio_fix, hac_widescreen = GetAspectRatio(110)
 		-- If player also has hud_sway.lua
@@ -839,19 +1242,24 @@ function SetSecondaryWeapon(id, width, i)
 			local slot_offsetx = i*3
 			local slot_offsety = i*21
 			write_short(address + 0x78, id) --sequence index
-			write_short(address + 0x24, floor((position_x_bigass - width*100 + slot_offsetx - aspect_ratio_fix)*hac_widescreen + x_offset))--x
+			write_short(address + 0x24, floor((position_x_bigass+chimera_fix - width*100 + slot_offsetx - aspect_ratio_fix)*hac_widescreen + x_offset))--x
 			write_short(address + 0x26, position_y_bigass - y_offset + slot_offsety)--y
 			write_float(address + 0x28, -0.5)--x scale
 		else
 			local slot_offsetx = i*-8
 			local slot_offsety = i*30
+			--local slot_offsetx = 25 + i*50 + (i+1)*
+			--local slot_offsety = 0
 			write_short(address + 0x78, id) --sequence index
 			if hrx then
 				x_offset = x_offset + 10
 			elseif h2_hud then
 				x_offset = x_offset + 40
+			elseif anniversary_hud then
+				x_offset = x_offset + 15
 			end
-			write_short(address + 0x24, floor((position_x + width*50 + slot_offsetx + aspect_ratio_fix)*hac_widescreen + x_offset))--x
+			
+			write_short(address + 0x24, floor((position_x-chimera_fix + width*50 + slot_offsetx + aspect_ratio_fix)*hac_widescreen + x_offset))--x
 			write_short(address + 0x26, position_y - y_offset + slot_offsety)--y
 			write_float(address + 0x28, 0.75*hac_widescreen)
 		end
@@ -870,6 +1278,57 @@ function SetHudPosition(i,x,y,x_scale,y_scale)
 		write_float(address + 0x28, x_scale*0.1)--scale x
 		write_float(address + 0x2C, y_scale*0.3)--scale y
 	end
+end
+
+function SetHitmarker(enable)
+	local aspect_ratio_fix, hac_widescreen = GetAspectRatio(100)
+	local time_since_hitmarker = ticks() - last_hitmarker_time
+	
+	if time_since_hitmarker > hitmarker_length then
+		enable = false
+	elseif time_since_hitmarker < 0 then --if checkpoint was loaded
+		last_hitmarker_time = 0
+	end
+	--console_out(enable)
+	for i=0,3 do
+		local address = new_struct1 + (32+i)*180
+		if enable then
+			local anim = (0*(1-time_since_hitmarker)+hitmarker_animation_position*time_since_hitmarker)
+			local x = hitmarker_position + anim
+			local y = x
+			local x_scale = 0.3
+			local y_scale = x_scale
+			if i>1 then
+				x=-x-1
+				x_scale=-x_scale
+			end
+			if i%2 == 1 then
+				y=-y-1
+				y_scale = -y_scale
+			end
+			
+			if soi then
+				x_scale = -x_scale*0.3
+				y_scale = y_scale*0.3
+			end
+			
+			write_short(address + 0x24, floor(x*hac_widescreen))--x
+			write_short(address + 0x26, floor(y))--y
+			write_float(address + 0x28, x_scale*hac_widescreen)--scale x
+			write_float(address + 0x2C, y_scale)--scale y
+			
+			-- to remove later
+			--write_word(address + 0x00, 6)--state
+			--write_dword(address + 0x48, read_dword(bitmap_hitmarker_tag))--bitmap
+			--write_dword(address + 0x48 + 0xC, read_dword(bitmap_hitmarker_tag + 0xC))
+			--write_short(address + 0x78, 0) --sequence index
+			--WriteColor(address + 0x58, hitmarker_color.blue, hitmarker_color.green, hitmarker_color.red, 0) --default color
+		else
+			write_short(address + 0x24, 999)--x
+			write_short(address + 0x26, 999)--y
+		end
+	end
+	return false
 end
 
 function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
@@ -900,16 +1359,14 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 						
 						if ssz < 1 then
 							SetHudPosition(i,ssx,ssy,dist,dist)
-						else
+						else -- if marker is behind the camera
 							SetHudPosition(i,999,999)
 						end
 					else
-						SetHudPosition(i,999,999)
-						POSITIONS[i] = nil
+						RemoveMarker(i)
 					end
 				else
-					SetHudPosition(i,999,999)
-					POSITIONS[i] = nil
+					RemoveMarker(i)
 				end
 			end
 		end
@@ -927,40 +1384,57 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 			else
 				local Secondaries = {}
 				local weap_slot = read_byte(player + 0x2F2)
-				
+				--console_out("slot: "..weap_slot)
 				for i=0,3 do
 					if weap_slot ~= i then
 						local msg_id = -1
 						local width = 1
 						local weapon = get_object(read_dword(player + 0x2F8+4*i))
+						local waypoint = nil
 						
 						if weapon then
 							weapon = read_dword(weapon)
 							if WEAPON_HUDS[weapon] ~= nil then
 								msg_id = WEAPON_HUDS[weapon].id
 								width = WEAPON_HUDS[weapon].width
+								waypoint = WEAPON_HUDS[weapon].waypoint
+								name = WEAPON_HUDS[weapon].name
+								--console_out(i.." "..WEAPON_HUDS[weapon].name)
+								Secondaries[i] = {["msg"] = msg_id,["width"] = width,["waypoint"] = waypoint, ["name"] = name}
 							end
 						end
-						
-						Secondaries[i] = {["msg"] = msg_id,["width"] = width}
 					else
-						Secondaries[i] = {["msg"] = -1,["width"] = 1}
+						Secondaries[i] = nil
 					end
 				end
 				
-				if weap_slot == 1 and Secondaries[2].msg > -1 then
-					Secondaries[1] = Secondaries[0]
-					Secondaries[0] = Secondaries[2]
-					Secondaries[2] = Secondaries[3]
-				elseif weap_slot == 0 then
-					Secondaries[0] = Secondaries[1]
-					Secondaries[1] = Secondaries[2]
-					Secondaries[2] = Secondaries[3]
+				local RealSecondaries = {}
+				local real_slot = 0
+				
+				for i=weap_slot,3 do
+					if Secondaries[i] ~= nil then
+						RealSecondaries[real_slot] = Secondaries[i]
+						Secondaries[i] = nil
+						real_slot = real_slot + 1
+					end
 				end
 				
 				for i=0,3 do
 					if Secondaries[i] ~= nil then
-						SetSecondaryWeapon(Secondaries[i].msg, Secondaries[i].width, i)
+						RealSecondaries[real_slot] = Secondaries[i]
+						Secondaries[i] = nil
+						real_slot = real_slot + 1
+					end
+				end
+				
+				--clear the weapons from hud. I know there are much better ways of doing this but who cares
+				for i=0,3 do
+					SetSecondaryWeapon(-1, 1, i)
+				end
+				
+				for i=0,3 do
+					if RealSecondaries[i] ~= nil then
+						SetSecondaryWeapon(RealSecondaries[i].msg, RealSecondaries[i].width, i, RealSecondaries[i].waypoint)
 					end
 				end
 			end
@@ -968,6 +1442,46 @@ function OnCamera(x, y, z, fov, x1, y1, z1, x2, y2, z2)
 			SetSecondaryWeapon(-1, 1, 0)
 			SetSecondaryWeapon(-1, 1, 1)
 			SetSecondaryWeapon(-1, 1, 2)
+		end
+	end
+	
+	if hitmarkers then
+		--Multiplayer
+		if ting then
+			local hitmarker_found = false
+			local count = 0
+			local sound_count3 = read_byte(sounds_global + 50)
+			for i=0,100 do -- there's probably a better way of doing this
+				local struct = sound_struct_address + i*176
+				if count >= sound_count3 then
+					break
+				end
+				local sound_order_id = read_word(struct + 140)
+				if sound_order_id ~= 0xFFFF then
+					count = count + 1
+					local sound_tag_id = read_dword(struct + 8)
+					if sound_tag_id == ting then
+						if HITMARKER_SOUNDS[i] == nil then
+							HITMARKER_SOUNDS[i] = true
+							last_hitmarker_time = ticks()
+						end
+						hitmarker_found = true
+					else
+						HITMARKER_SOUNDS[i] = nil
+					end
+				else
+					HITMARKER_SOUNDS[i] = nil
+				end
+			end
+			
+			SetHitmarker(hitmarker_found)
+			if hitmarker_found == false then
+				HITMARKER_SOUNDS = {}
+			end
+			
+		--Singleplayer
+		elseif server_type == "none" then
+			SetHitmarker(true)
 		end
 	end
 end
@@ -985,9 +1499,6 @@ function GetScale(dist)
 end
 
 function CalculateFov(fov)
-	local screen_h = read_word(0x637CF0)
-	local screen_w = read_word(0x637CF2)
-	aspect_ratio = screen_w/screen_h
 	fov = fov*180/pi
 	vertical_fov = atan(tan(fov*pi/360) * (1/aspect_ratio)) * 360/pi
 	vertical_fov = vertical_fov * 0.9
