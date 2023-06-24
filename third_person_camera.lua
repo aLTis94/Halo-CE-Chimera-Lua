@@ -1466,10 +1466,7 @@ end
 
 function ChangeCameraTrack()
 	if enable_third_person_cam == false then 
-		ToggleScopeMasks(true)
 		return 
-	else
-		ToggleScopeMasks(false)
 	end
 	
 	if changed == false then
@@ -1487,29 +1484,6 @@ function ChangeCameraTrack()
 		PrepareNeedlerTags()
 		
 		changed = true
-	end
-	
-	if false and map_is_protected then -- disabled for now
-		if find_camera_track then
-			local tag_array = read_dword(0x40440000)
-			local tag_count = read_dword(0x4044000C)
-			for i = 0,tag_count - 1 do
-				local camera_tag = tag_array + i * 0x20
-				local tag_class = read_dword(camera_tag)
-				if tag_class == 1953653099 then
-					tag = read_dword(camera_tag + 0x14)
-					local control_point_count = read_dword(tag + 0x4)
-					local control_point_address = read_dword(tag + 0x8)
-					if control_point_count > 1 then
-						local address = control_point_address
-						if read_float(address) > CONTROL_POINTS[0][1] - 0.01 and read_float(address) < CONTROL_POINTS[0][1] + 0.01 then
-							protected_camera_track = camera_tag
-						end
-					end
-				end
-			end
-			find_camera_track = false
-		end
 	end
 	
 	if map_is_protected == false then
