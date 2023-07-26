@@ -1,4 +1,4 @@
--- version 0.23 (by aLTis)
+-- version 1.0.0 (by aLTis)
 
 --CONFIG
 
@@ -210,7 +210,7 @@ function OnFrame()
 							write_short(struct + INFO["y"], INFO["coord"][i*4+1] + z * INFO["direction_y"])
 							write_short(struct + INFO["x2"], INFO["coord"][i*4+2] + x * INFO["direction"])
 							write_short(struct + INFO["y2"], INFO["coord"][i*4+3] + z * INFO["direction_y"])
-						else
+						elseif INFO["coord"][i*2] ~= nil then
 							write_short(struct + INFO["x"], INFO["coord"][i*2] + x * INFO["direction"])
 							write_short(struct + INFO["y"], INFO["coord"][i*2+1] + z * INFO["direction_y"])
 						end
@@ -267,39 +267,38 @@ function GetWPHI(meta_id)
 				
 				--Don't sway if it has multitex overlays
 				local multitex = read_dword(struct + 0x7C)
-				if multitex > 0 then
-					HUD[tag_data][0x60] = nil
-					break
-				end
-				
-				--if anchor ~= 4 then
-					HUD[tag_data][0x60]["coord"][i*2] = read_short(struct + HUD[tag_data][0x60]["x"])
-					HUD[tag_data][0x60]["coord"][i*2+1] = read_short(struct + HUD[tag_data][0x60]["y"])
+				if multitex == 0 then
 					
-					if anchor == 4 then
-						local bitmap = read_string(read_dword(struct + 0x4C))
-						if bitmap ~= nil then
-							if HUD[tag_data][0x60]["coord"][i*2] == 0 and HUD[tag_data][0x60]["coord"][i*2+1] == 0 or string.find(bitmap, "dynamic") then
-								HUD[tag_data][0x60] = nil
-								break
+					
+					--if anchor ~= 4 then
+						HUD[tag_data][0x60]["coord"][i*2] = read_short(struct + HUD[tag_data][0x60]["x"])
+						HUD[tag_data][0x60]["coord"][i*2+1] = read_short(struct + HUD[tag_data][0x60]["y"])
+						
+						if anchor == 4 then
+							local bitmap = read_string(read_dword(struct + 0x4C))
+							if bitmap ~= nil then
+								if HUD[tag_data][0x60]["coord"][i*2] == 0 and HUD[tag_data][0x60]["coord"][i*2+1] == 0 or string.find(bitmap, "dynamic") then
+									HUD[tag_data][0x60] = nil
+									break
+								end
+							else
+								--console_out(tag_name.." had no bitmap path")
+								HUD[tag_data] = nil
+								return
+								--HUD[tag_data][0x60] = nil
+								--break
 							end
-						else
-							--console_out(tag_name.." had no bitmap path")
-							HUD[tag_data] = nil
-							return
-							--HUD[tag_data][0x60] = nil
-							--break
 						end
-					end
-				--else
-					--local bitmap = read_string(read_dword(struct + 0x4C))
-					--if string.find(bitmap, "visor") then
-					--	HUD[tag_data][0x60]["coord"][i*2] = read_short(struct + HUD[tag_data][0x60]["x"])
-					--	HUD[tag_data][0x60]["coord"][i*2+1] = read_short(struct + HUD[tag_data][0x60]["y"])
 					--else
-					--	HUD[tag_data][0x60] = nil
+						--local bitmap = read_string(read_dword(struct + 0x4C))
+						--if string.find(bitmap, "visor") then
+						--	HUD[tag_data][0x60]["coord"][i*2] = read_short(struct + HUD[tag_data][0x60]["x"])
+						--	HUD[tag_data][0x60]["coord"][i*2+1] = read_short(struct + HUD[tag_data][0x60]["y"])
+						--else
+						--	HUD[tag_data][0x60] = nil
+						--end
 					--end
-				--end
+				end
 			end
 			HUD[tag_data][0x6C] = {}
 			HUD[tag_data][0x6C]["direction"] = direction
@@ -679,7 +678,7 @@ function OnUnload()
 						write_i16(struct + INFO["y"], INFO["coord"][i*4+1])
 						write_i16(struct + INFO["x2"], INFO["coord"][i*4+2])
 						write_i16(struct + INFO["y2"], INFO["coord"][i*4+3])
-					else
+					elseif INFO["coord"][i*2] ~= nil then
 						write_i16(struct + INFO["x"], INFO["coord"][i*2])
 						write_i16(struct + INFO["y"], INFO["coord"][i*2+1])
 					end
