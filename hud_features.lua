@@ -274,8 +274,8 @@ function OnTick()
 				blue_score = read_dword(ctf_globals + 4 + 0x10)
 				score_limit = read_dword(ctf_globals + 0x18)
 			elseif gametype == 2 then --slayer
-				red_score = read_dword(slayer_globals)
-				blue_score = read_dword(slayer_globals + 4)
+				red_score = read_long(slayer_globals)
+				blue_score = read_long(slayer_globals + 4)
 			elseif gametype == 3 then --oddball
 				red_score = floor(read_dword(oddball_globals + 0x4)/30)
 				blue_score = floor(read_dword(oddball_globals + 4 + 0x4)/30)
@@ -357,7 +357,7 @@ function GetPlayerScore(i)
 	local stats_base = stats_globals + i*0x30
 	local player_score = 0
 	if gametype == 2 then --slayer
-		player_score = read_dword(slayer_globals + i*4 + 0x40)
+		player_score = read_long(slayer_globals + i*4 + 0x40)
 	elseif gametype == 3 then --oddball
 		player_score = floor(read_dword(oddball_globals + i*4 + 0x44)/30)
 	elseif gametype == 4 then --KOTH
@@ -1150,6 +1150,8 @@ function SetNumber(i, number)
 			write_float(address + 0x2C, 0)
 		end
 		return false
+	elseif number < 0 then
+		number = 0
 	end
 	
 	local NUMS = {
