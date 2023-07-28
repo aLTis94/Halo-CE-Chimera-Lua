@@ -1,4 +1,4 @@
--- version 1.0.0 (by aLTis)
+-- version 1.0.1 (by aLTis)
 
 --CONFIG
 
