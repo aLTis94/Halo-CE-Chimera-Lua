@@ -1,4 +1,4 @@
---HUD Features script by aLTis. Version 1.1.1
+--HUD Features script by aLTis. Version 1.1.2
 
 --CONFIG
 	dead_ally_markers_enable = true -- shows a red arrow above dead ally bodies (doesn't work on Chimera 1.0)
