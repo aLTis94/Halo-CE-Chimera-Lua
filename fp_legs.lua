@@ -213,6 +213,9 @@ function OnTick()
 				if new_chimera then
 					legs_biped = spawn_object(player_biped_tag_id, x, y, z + biped_z_offset)
 				else
+					if get_tag(tag_type, player_biped_name) == nil then
+						return
+					end
 					legs_biped = spawn_object(tag_type, player_biped_name, x, y, z + biped_z_offset)
 				end
 				previous_biped_tag_id = player_biped_tag_id

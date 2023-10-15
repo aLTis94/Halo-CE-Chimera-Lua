@@ -454,7 +454,9 @@ function BackpackWeapons(i, player)
 		
 		-- check if biped already has backpack weapons in this map
 		local player_biped_name = GetName(player)
-		local biped_tag = read_dword(get_tag("bipd", player_biped_name) + 0x14)
+		local biped_tag = get_tag("bipd", player_biped_name)
+		if biped_tag == nil then return end
+		biped_tag = read_dword(biped_tag + 0x14)
 		local biped_model = read_dword(biped_tag + 0x28 + 0xC)
 		local biped_model_tag = read_dword(get_tag(biped_model) + 0x14)
 		local region_count = read_dword(biped_model_tag + 0xC4)
