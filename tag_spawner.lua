@@ -468,7 +468,7 @@ function CheckProtection()
 		local name = read_string(name_addr)
         for k = 0,i - 1 do
             local tag_k = tag_array + k * 0x20
-            if read_dword(tag_k) == tag_class and read_dword(tag_k + 0x10) == name_addr then
+            if read_dword(tag_k) == tag_class and (read_dword(tag_k + 0x10) == name_addr or read_string(read_dword(tag_k + 0x10)) == name) then
                 return true, name_addr, name
             end
         end
@@ -520,6 +520,7 @@ function Initialize()
 		local meta_id = read_dword(tag + 0xC)
 		local name_addr = read_dword(tag + 0x10)
 		local name = read_string(name_addr)
+		
 		if map_is_protected and (name_addr == protected_addr or (protected_name == name and CheckTagClass(tag_class)) ) then
 			name_addr = name_addr + protected_tag_counter * 32
 			protected_tag_counter = protected_tag_counter + 1
@@ -538,7 +539,7 @@ function Initialize()
 		
 		name = string.upper(name)
 		
-		::fail::
+		--console_out(string.format("%X", tag_class).." "..name)
 		
 		local tag_data = read_dword(tag + 0x14)
 		if tag_class == 0x77656170 then --weap
