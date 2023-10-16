@@ -1,3 +1,12 @@
+-- This script allows you to spawn in any object that is in the map files. Should work on protected maps too.
+-- !!!WARNING!!! - This script should not be used in multiplayer games because spawned objects will not sync.
+
+-- Controls:
+-- Arrow keys to use the spawn menu
+-- 1 - open spawn menu
+-- 3 - devcam
+-- 4 - cheat_all_weapons
+-- 5 - cheat_all_vehicles
 
 local keyboard_input_address = 0x64C550
 local mouse_input_address = 0x64C73C
@@ -20,6 +29,7 @@ local mouse_input_address = 0x64C73C
 	
 	local DEFAULT_TAGS ={
 		["vehicles\\warthog\\mp_warthog"] = 1,
+		["vehicles\\warthog\\warthog"] = 1,
 		["vehicles\\rwarthog\\rwarthog"] = 1,
 		["vehicles\\scorpion\\scorpion_mp"] = 1,
 		["vehicles\\scorpion\\scorpion"] = 1,
@@ -456,7 +466,7 @@ function Initialize()
 	for i=1,#TAGS do
 		local classic = true
 		for j=1,#TAGS[i] do
-			if TAGS[i][j].classic_tag == false then
+			if TAGS[i][j].classic_tag ~= true then
 				classic = false
 				break
 			end
