@@ -1,4 +1,4 @@
-	-- version 2023-04-23
+	-- version 1.0.1
 -- FEATURES:
 	-- fixes grenade throw animation when walking, jumping, crouching, riding a vehicle
 	-- should work on all maps, including protected maps
@@ -8,6 +8,10 @@
 	-- only works on multiplayer and only if you are not the host
 	-- only fixes in client side so what you see other players doing will not match what's happening on the server
 	-- spamming grenade throw key in third person will repeat the animation
+	
+-- CHANGELOG:
+-- 1.0.1
+-- fixed support for animation tags with over 256 animations
 
 clua_version = 2.042
 
@@ -123,7 +127,7 @@ function SetupAnimationTag()
 						if anim_count > 19 then
 							local anim_address = read_dword(struct + 0x98 + 4)
 							local struct = anim_address + 20 * 2
-							local anim = read_byte(struct)
+							local anim = read_word(struct)
 							if anim ~= 0xFFFF then
 								local animation_count = read_dword(anim_tag_data + 0x74)
 								local animation_address = read_dword(anim_tag_data + 0x74 + 4)
